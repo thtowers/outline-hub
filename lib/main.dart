@@ -7,7 +7,7 @@ void main() {
 }
 
 class FlutterCodeApp extends StatelessWidget {
-  const FlutterCodeApp({Key? key}) : super(key: key);
+  const FlutterCodeApp({super.key});
 
   @override
   Widget build(BuildContext context) {

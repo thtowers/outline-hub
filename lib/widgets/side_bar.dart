@@ -3,13 +3,15 @@ import '../theme/app_theme.dart';
 
 class SideBar extends StatefulWidget {
   final String selectedFile;
+  final List<String> openTabs;
   final Function(String) onFileSelected;
 
   const SideBar({
-    Key? key,
+    super.key,
     required this.selectedFile,
+    required this.openTabs,
     required this.onFileSelected,
-  }) : super(key: key);
+  });
 
   @override
   State<SideBar> createState() => _SideBarState();
@@ -43,6 +45,12 @@ class _SideBarState extends State<SideBar> {
             child: ListView(
               padding: EdgeInsets.zero,
               children: [
+                // Untitled / Open files not in the tree
+                ...widget.openTabs
+                    .where((tab) => tab.startsWith('Untitled'))
+                    .map((tab) => _buildFileItem(tab)),
+                if (widget.openTabs.any((tab) => tab.startsWith('Untitled')))
+                  const Divider(height: 1, indent: 16, endIndent: 16),
                 _buildFolderItem('lib'),
                 if (_expandedFolders.contains('lib'))
                   _buildFileItem('main.dart', indent: 1),
@@ -81,13 +89,28 @@ class _SideBarState extends State<SideBar> {
       onTap: () {
         widget.onFileSelected(label);
       },
-      child: _buildTreeItem(Icons.insert_drive_file, label, false, indent: indent, isSelected: widget.selectedFile == label),
+      child: _buildTreeItem(
+        Icons.insert_drive_file,
+        label,
+        false,
+        indent: indent,
+        isSelected: widget.selectedFile == label,
+      ),
     );
   }
 
-  Widget _buildTreeItem(IconData icon, String label, bool isExpanded, {int indent = 0, bool isSelected = false, bool isFolder = false}) {
+  Widget _buildTreeItem(
+    IconData icon,
+    String label,
+    bool isExpanded, {
+    int indent = 0,
+    bool isSelected = false,
+    bool isFolder = false,
+  }) {
     return Container(
-      color: isSelected ? AppTheme.accent.withOpacity(0.15) : Colors.transparent,
+      color: isSelected
+          ? AppTheme.accent.withOpacity(0.15)
+          : Colors.transparent,
       padding: EdgeInsets.only(
         left: 12.0 + (indent * 16.0),
         top: 6.0,
@@ -97,11 +120,19 @@ class _SideBarState extends State<SideBar> {
       child: Row(
         children: [
           if (isFolder)
-            Icon(isExpanded ? Icons.arrow_drop_down : Icons.arrow_right, size: 16, color: AppTheme.textSecondary)
+            Icon(
+              isExpanded ? Icons.arrow_drop_down : Icons.arrow_right,
+              size: 16,
+              color: AppTheme.textSecondary,
+            )
           else
             const SizedBox(width: 16),
           const SizedBox(width: 4),
-          Icon(icon, size: 16, color: isFolder ? Colors.blueAccent : AppTheme.textSecondary),
+          Icon(
+            icon,
+            size: 16,
+            color: isFolder ? Colors.blueAccent : AppTheme.textSecondary,
+          ),
           const SizedBox(width: 8),
           Text(
             label,

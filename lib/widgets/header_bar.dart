@@ -4,8 +4,14 @@ import '../theme/app_theme.dart';
 class HeaderBar extends StatelessWidget {
   final VoidCallback? onSearchToggle;
   final VoidCallback? onTerminalToggle;
+  final VoidCallback? onNewTab;
 
-  const HeaderBar({Key? key, this.onSearchToggle, this.onTerminalToggle}) : super(key: key);
+  const HeaderBar({
+    super.key,
+    this.onSearchToggle,
+    this.onTerminalToggle,
+    this.onNewTab,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -18,12 +24,12 @@ class HeaderBar extends StatelessWidget {
           const SizedBox(width: 16),
           const Icon(Icons.menu, size: 18),
           const SizedBox(width: 24),
-          
+
           // Action Buttons
           IconButton(
             icon: const Icon(Icons.note_add_outlined),
             tooltip: 'New Tab',
-            onPressed: () {},
+            onPressed: onNewTab ?? () {},
             splashRadius: 20,
           ),
           IconButton(
@@ -32,9 +38,9 @@ class HeaderBar extends StatelessWidget {
             onPressed: () {},
             splashRadius: 20,
           ),
-          
+
           const Spacer(),
-          
+
           // Title
           Text(
             'main.dart - Editor',
@@ -44,9 +50,9 @@ class HeaderBar extends StatelessWidget {
               fontSize: 14,
             ),
           ),
-          
+
           const Spacer(),
-          
+
           // Right panel options
           IconButton(
             icon: const Icon(Icons.search),

@@ -5,7 +5,7 @@ import '../widgets/document_view.dart';
 import '../theme/app_theme.dart';
 
 class MainWindow extends StatefulWidget {
-  const MainWindow({Key? key}) : super(key: key);
+  const MainWindow({super.key});
 
   @override
   State<MainWindow> createState() => _MainWindowState();
@@ -14,7 +14,7 @@ class MainWindow extends StatefulWidget {
 class _MainWindowState extends State<MainWindow> {
   bool _showRightPanel = false;
   String _rightPanelType = '';
-  
+
   List<String> _openTabs = ['main.dart', 'app.dart'];
   int _activeTabIndex = 0;
 
@@ -51,6 +51,19 @@ class _MainWindowState extends State<MainWindow> {
   void _selectTab(int index) {
     setState(() {
       _activeTabIndex = index;
+    });
+  }
+
+  void _handleNewTab() {
+    setState(() {
+      int counter = 1;
+      String newName = 'Untitled-$counter';
+      while (_openTabs.contains(newName)) {
+        counter++;
+        newName = 'Untitled-$counter';
+      }
+      _openTabs.add(newName);
+      _activeTabIndex = _openTabs.length - 1;
     });
   }
 
@@ -97,6 +110,7 @@ class _MainWindowState extends State<MainWindow> {
           HeaderBar(
             onSearchToggle: () => _toggleRightPanel('search'),
             onTerminalToggle: () => _toggleRightPanel('terminal'),
+            onNewTab: _handleNewTab,
           ),
           const Divider(height: 1),
           // Main Content Area
@@ -105,7 +119,10 @@ class _MainWindowState extends State<MainWindow> {
               children: [
                 // Left Sidebar (File Explorer)
                 SideBar(
-                  selectedFile: _openTabs.isNotEmpty ? _openTabs[_activeTabIndex] : '',
+                  selectedFile: _openTabs.isNotEmpty
+                      ? _openTabs[_activeTabIndex]
+                      : '',
+                  openTabs: _openTabs,
                   onFileSelected: _openFile,
                 ),
                 const VerticalDivider(width: 1),
@@ -117,6 +134,7 @@ class _MainWindowState extends State<MainWindow> {
                     onCloseTab: _closeTab,
                     onSelectTab: _selectTab,
                     onReorderTab: _reorderTab,
+                    onNewTab: _handleNewTab,
                   ),
                 ),
                 if (_showRightPanel) ...[
@@ -148,11 +166,19 @@ class _MainWindowState extends State<MainWindow> {
               children: [
                 Text(
                   _rightPanelType == 'search' ? 'Search' : 'Terminal',
-                  style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 13),
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
                 ),
                 InkWell(
                   onTap: () => setState(() => _showRightPanel = false),
-                  child: Icon(Icons.close, size: 16, color: AppTheme.textSecondary),
+                  child: Icon(
+                    Icons.close,
+                    size: 16,
+                    color: AppTheme.textSecondary,
+                  ),
                 ),
               ],
             ),
@@ -161,7 +187,9 @@ class _MainWindowState extends State<MainWindow> {
           Expanded(
             child: Center(
               child: Text(
-                _rightPanelType == 'search' ? 'Search panel...' : 'Terminal ready...',
+                _rightPanelType == 'search'
+                    ? 'Search panel...'
+                    : 'Terminal ready...',
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
             ),

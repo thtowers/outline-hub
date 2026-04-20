@@ -16,11 +16,7 @@ class AppTheme {
       brightness: Brightness.dark,
       scaffoldBackgroundColor: background,
       primaryColor: accent,
-      colorScheme: const ColorScheme.dark(
-        primary: accent,
-        surface: surface,
-        background: background,
-      ),
+      colorScheme: const ColorScheme.dark(primary: accent, surface: surface),
       textTheme: TextTheme(
         bodyMedium: GoogleFonts.inter(color: textPrimary),
         bodySmall: GoogleFonts.inter(color: textSecondary),
@@ -36,10 +32,6 @@ class AppTheme {
 
   // Code editor specific styling
   static TextStyle get codeTextStyle {
-    return GoogleFonts.firaCode(
-      fontSize: 14,
-      color: textPrimary,
-      height: 1.5,
-    );
+    return GoogleFonts.firaCode(fontSize: 14, color: textPrimary, height: 1.5);
   }
 }
