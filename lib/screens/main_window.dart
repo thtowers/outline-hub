@@ -17,9 +17,10 @@ class _MainWindowState extends State<MainWindow> {
   bool _showRightPanel = false;
   String _rightPanelType = '';
 
-  List<String> _openTabs = ['main.dart', 'app.dart'];
+  List<String> _openTabs = [];
   int _activeTabIndex = 0;
   String? _openedFolderName;
+  String? _openedFolderPath;
   List<Map<String, dynamic>> _folderFiles = [];
   double _sidebarWidth = 250.0;
   final Map<String, String> _fileContents = {};
@@ -96,11 +97,12 @@ class _MainWindowState extends State<MainWindow> {
         setState(() {
           _openedFolderName = selectedDirectory.split('/').last;
           if (_openedFolderName!.isEmpty) _openedFolderName = selectedDirectory;
+          _openedFolderPath = selectedDirectory;
         });
 
         // Build the tree recursively
         final tree = await _buildTree(Directory(selectedDirectory));
-        
+
         setState(() {
           _folderFiles = tree;
         });
@@ -119,10 +121,10 @@ class _MainWindowState extends State<MainWindow> {
   Future<void> _handleSaveFile() async {
     debugPrint('SAVE BUTTON CLICKED');
     if (_openTabs.isEmpty) return;
-    
+
     String currentPath = _openTabs[_activeTabIndex];
     String content = _fileContents[currentPath] ?? '';
-    
+
     // 1. Show format selection dialog
     String? extension = await showDialog<String>(
       context: context,
@@ -203,14 +205,16 @@ class _MainWindowState extends State<MainWindow> {
       for (var entity in entities) {
         String name = entity.path.split('/').last;
         // Skip heavy or hidden folders
-        if (name == 'node_modules' || name == '.git' || name == '.dart_tool') continue;
+        if (name == 'node_modules' || name == '.git' || name == '.dart_tool') {
+          continue;
+        }
 
         bool isFolder = entity is Directory;
         tree.add({
           'name': name,
           'path': entity.path,
           'isFolder': isFolder,
-          'children': isFolder ? await _buildTree(entity as Directory) : null,
+          'children': isFolder ? await _buildTree(entity) : null,
         });
       }
       // Sort: Folders first, then files
@@ -283,6 +287,7 @@ class _MainWindowState extends State<MainWindow> {
                       : '',
                   openTabs: _openTabs,
                   folderName: _openedFolderName,
+                  folderPath: _openedFolderPath,
                   folderFiles: _folderFiles,
                   width: _sidebarWidth,
                   onFileSelected: _openFile,
@@ -302,7 +307,7 @@ class _MainWindowState extends State<MainWindow> {
                     },
                     child: Container(
                       width: 4,
-                      color: Colors.black.withOpacity(0.1),
+                      color: Colors.black.withValues(alpha: 0.1),
                     ),
                   ),
                 ),

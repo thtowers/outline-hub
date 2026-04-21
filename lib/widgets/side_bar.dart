@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:io';
 import '../theme/app_theme.dart';
 
 class SideBar extends StatefulWidget {
@@ -6,6 +8,7 @@ class SideBar extends StatefulWidget {
   final List<String> openTabs;
   final List<Map<String, dynamic>> folderFiles;
   final String? folderName;
+  final String? folderPath;
   final double width;
   final Function(String) onFileSelected;
 
@@ -15,6 +18,7 @@ class SideBar extends StatefulWidget {
     required this.openTabs,
     required this.folderFiles,
     this.folderName,
+    this.folderPath,
     required this.width,
     required this.onFileSelected,
   });
@@ -25,6 +29,58 @@ class SideBar extends StatefulWidget {
 
 class _SideBarState extends State<SideBar> {
   final Set<String> _expandedFolders = {'src', 'lib'};
+
+  void _showContextMenu(BuildContext context, Offset globalPosition, String path, bool isFolder) async {
+    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    
+    final RelativeRect position = RelativeRect.fromRect(
+      Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 0, 0),
+      Offset.zero & overlay.size,
+    );
+
+    final String? action = await showMenu<String>(
+      context: context,
+      position: position,
+      color: AppTheme.sidebarBackground,
+      elevation: 8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      items: [
+        PopupMenuItem(
+          value: 'open_location',
+          child: Row(
+            children: [
+              Icon(Icons.folder_open, size: 18, color: AppTheme.textPrimary),
+              const SizedBox(width: 12),
+              Text('Open in folder', style: TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (action == 'open_location') {
+      final String dirPath = isFolder ? path : File(path).parent.path;
+      final Uri uri = Uri.directory(dirPath);
+      
+      try {
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri);
+        } else {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Could not open folder location')),
+            );
+          }
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e')),
+          );
+        }
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -59,19 +115,22 @@ class _SideBarState extends State<SideBar> {
                   const Divider(height: 1, indent: 16, endIndent: 16),
 
                 if (widget.folderName != null) ...[
-                  _buildFolderItem(widget.folderName!),
+                  _buildFolderItem(widget.folderName!, path: widget.folderPath),
                   if (_expandedFolders.contains(widget.folderName))
                     ..._buildTreeNodes(widget.folderFiles, indent: 1),
                 ] else ...[
-                  // Sample data when no folder is open
-                  _buildFolderItem('lib'),
-                  if (_expandedFolders.contains('lib'))
-                    _buildFileItem('main.dart', path: 'main.dart', indent: 1),
-                  _buildFolderItem('src'),
-                  if (_expandedFolders.contains('src')) ...[
-                    _buildFileItem('app.dart', path: 'app.dart', indent: 1),
-                    _buildFileItem('main.dart', path: 'main.dart', indent: 1),
-                  ],
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 20),
+                      child: Text(
+                        'No folder open',
+                        style: TextStyle(
+                          color: AppTheme.textSecondary.withValues(alpha: 0.5),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -86,7 +145,7 @@ class _SideBarState extends State<SideBar> {
     List<Widget> nodes = [];
     for (var item in items) {
       if (item['isFolder']) {
-        nodes.add(_buildFolderItem(item['name'], indent: indent));
+        nodes.add(_buildFolderItem(item['name'], indent: indent, path: item['path']));
         if (_expandedFolders.contains(item['name'])) {
           nodes.addAll(_buildTreeNodes(
             List<Map<String, dynamic>>.from(item['children'] ?? []),
@@ -101,7 +160,7 @@ class _SideBarState extends State<SideBar> {
     return nodes;
   }
 
-  Widget _buildFolderItem(String label, {int indent = 0}) {
+  Widget _buildFolderItem(String label, {int indent = 0, String? path}) {
     bool isExpanded = _expandedFolders.contains(label);
     return InkWell(
       onTap: () {
@@ -113,6 +172,11 @@ class _SideBarState extends State<SideBar> {
           }
         });
       },
+      onSecondaryTapDown: (details) {
+        if (path != null) {
+          _showContextMenu(context, details.globalPosition, path, true);
+        }
+      },
       child: _buildTreeItem(Icons.folder, label, isExpanded,
           isFolder: true, indent: indent),
     );
@@ -122,6 +186,9 @@ class _SideBarState extends State<SideBar> {
     return InkWell(
       onTap: () {
         widget.onFileSelected(path);
+      },
+      onSecondaryTapDown: (details) {
+        _showContextMenu(context, details.globalPosition, path, false);
       },
       child: _buildTreeItem(
         Icons.insert_drive_file,
@@ -143,7 +210,7 @@ class _SideBarState extends State<SideBar> {
   }) {
     return Container(
       color: isSelected
-          ? AppTheme.accent.withOpacity(0.15)
+          ? AppTheme.accent.withValues(alpha: 0.15)
           : Colors.transparent,
       padding: EdgeInsets.only(
         left: 12.0 + (indent * 16.0),

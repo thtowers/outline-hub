@@ -134,7 +134,7 @@ class _DocumentViewState extends State<DocumentView> {
                         Icon(
                           Icons.edit_note,
                           size: 64,
-                          color: AppTheme.textSecondary.withOpacity(0.2),
+                          color: AppTheme.textSecondary.withValues(alpha: 0.2),
                         ),
                         const SizedBox(height: 16),
                         Text(
@@ -153,7 +153,7 @@ class _DocumentViewState extends State<DocumentView> {
                               label: const Text('New File'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor:
-                                    AppTheme.accent.withOpacity(0.1),
+                                    AppTheme.accent.withValues(alpha: 0.1),
                                 foregroundColor: AppTheme.accent,
                                 elevation: 0,
                               ),
@@ -164,7 +164,7 @@ class _DocumentViewState extends State<DocumentView> {
                               label: const Text('Open File'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor:
-                                    AppTheme.accent.withOpacity(0.1),
+                                    AppTheme.accent.withValues(alpha: 0.1),
                                 foregroundColor: AppTheme.accent,
                                 elevation: 0,
                               ),
@@ -175,7 +175,7 @@ class _DocumentViewState extends State<DocumentView> {
                               label: const Text('Open Folder'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor:
-                                    AppTheme.accent.withOpacity(0.1),
+                                    AppTheme.accent.withValues(alpha: 0.1),
                                 foregroundColor: AppTheme.accent,
                                 elevation: 0,
                               ),
@@ -362,7 +362,7 @@ class _DocumentViewState extends State<DocumentView> {
               child: Text(
                 '${index + 1}',
                 style: AppTheme.codeTextStyle.copyWith(
-                  color: AppTheme.textSecondary.withOpacity(0.4),
+                  color: AppTheme.textSecondary.withValues(alpha: 0.4),
                   fontSize: 14,
                   height: 1.5,
                 ),
