@@ -5,12 +5,14 @@ class HeaderBar extends StatelessWidget {
   final VoidCallback? onSearchToggle;
   final VoidCallback? onTerminalToggle;
   final VoidCallback? onNewTab;
+  final VoidCallback? onSave;
 
   const HeaderBar({
     super.key,
     this.onSearchToggle,
     this.onTerminalToggle,
     this.onNewTab,
+    this.onSave,
   });
 
   @override
@@ -35,7 +37,7 @@ class HeaderBar extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.save_outlined),
             tooltip: 'Save',
-            onPressed: () {},
+            onPressed: onSave ?? () {},
             splashRadius: 20,
           ),
 

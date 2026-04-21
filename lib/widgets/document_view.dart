@@ -1,22 +1,33 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import 'dart:io';
 
 class DocumentView extends StatefulWidget {
   final List<String> tabs;
   final int activeTabIndex;
+  final Map<String, String> fileContents;
   final Function(int) onCloseTab;
   final Function(int) onSelectTab;
   final void Function(int, int) onReorderTab;
   final VoidCallback onNewTab;
+  final VoidCallback onOpenFile;
+  final VoidCallback onOpenFolder;
+  final VoidCallback onSaveFile;
+  final Function(String, String) onContentChanged;
 
   const DocumentView({
     super.key,
     required this.tabs,
     required this.activeTabIndex,
+    required this.fileContents,
     required this.onCloseTab,
     required this.onSelectTab,
     required this.onReorderTab,
     required this.onNewTab,
+    required this.onOpenFile,
+    required this.onOpenFolder,
+    required this.onSaveFile,
+    required this.onContentChanged,
   });
 
   @override
@@ -25,91 +36,85 @@ class DocumentView extends StatefulWidget {
 
 class _DocumentViewState extends State<DocumentView> {
   late TextEditingController _controller;
-
-  final Map<String, String> _fileContents = {
-    'main.dart': '''import 'package:flutter/material.dart';
-
-void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Editor',
-      theme: ThemeData(
-        brightness: Brightness.dark,
-      ),
-      home: const Scaffold(
-        body: Center(
-          child: Text('Hello World!'),
-        ),
-      ),
-    );
-  }
-}''',
-    'app.dart': '''import 'package:flutter/material.dart';
-
-class AppTheme {
-  static const Color background = Color(0xFF1E1E1E);
-  static const Color surface = Color(0xFF282828);
-  static const Color accent = Colors.blueAccent;
-  
-  static final ThemeData darkTheme = ThemeData(
-    brightness: Brightness.dark,
-    scaffoldBackgroundColor: background,
-    primaryColor: surface,
-  );
-}''',
-  };
+  late ScrollController _editorScrollController;
+  late ScrollController _lineNumbersScrollController;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: _getContentForCurrentTab());
+    _editorScrollController = ScrollController();
+    _lineNumbersScrollController = ScrollController();
+
+    // Sync line numbers scroll with editor scroll
+    _editorScrollController.addListener(() {
+      if (_lineNumbersScrollController.hasClients) {
+        _lineNumbersScrollController
+            .jumpTo(_editorScrollController.offset);
+      }
+    });
+
+    // Rebuild UI on text changes to update line count
+    _controller.addListener(() {
+      if (mounted) setState(() {});
+    });
   }
 
   String _getContentForCurrentTab() {
     if (widget.tabs.isEmpty) return '';
-    String file = widget.tabs[widget.activeTabIndex];
-    return _fileContents[file] ?? '// $file\n';
+    String path = widget.tabs[widget.activeTabIndex];
+    
+    // 1. Check if it's already in memory
+    if (widget.fileContents.containsKey(path)) return widget.fileContents[path]!;
+
+    // 2. Try to read from real disk
+    try {
+      final file = File(path);
+      if (file.existsSync()) {
+        final content = file.readAsStringSync();
+        debugPrint('Successfully read file: $path');
+        return content;
+      } else {
+        debugPrint('FILE NOT FOUND AT: "$path"');
+        return '// Error: File not found at:\n// $path\n';
+      }
+    } catch (e) {
+      debugPrint('ERROR READING FILE: $e');
+      return '// Error reading file:\n// $e\n';
+    }
   }
 
   @override
   void didUpdateWidget(DocumentView oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    String? oldActiveFile;
-    if (oldWidget.tabs.isNotEmpty &&
-        oldWidget.activeTabIndex < oldWidget.tabs.length) {
-      oldActiveFile = oldWidget.tabs[oldWidget.activeTabIndex];
-    }
+    String? oldActivePath = oldWidget.tabs.isNotEmpty && oldWidget.activeTabIndex < oldWidget.tabs.length
+        ? oldWidget.tabs[oldWidget.activeTabIndex] : null;
+    String? newActivePath = widget.tabs.isNotEmpty && widget.activeTabIndex < widget.tabs.length
+        ? widget.tabs[widget.activeTabIndex] : null;
 
-    String? newActiveFile;
-    if (widget.tabs.isNotEmpty && widget.activeTabIndex < widget.tabs.length) {
-      newActiveFile = widget.tabs[widget.activeTabIndex];
-    }
-
-    if (oldActiveFile != newActiveFile) {
-      if (oldActiveFile != null) {
-        _fileContents[oldActiveFile] = _controller.text;
-      }
-      if (newActiveFile != null) {
-        if (!_fileContents.containsKey(newActiveFile)) {
-          _fileContents[newActiveFile] = '// $newActiveFile\n';
-        }
-        _controller.text = _fileContents[newActiveFile]!;
-      }
+    if (oldActivePath != newActivePath || oldWidget.tabs.length != widget.tabs.length) {
+      _controller.text = _getContentForCurrentTab();
     }
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _editorScrollController.dispose();
+    _lineNumbersScrollController.dispose();
     super.dispose();
+  }
+
+  IconData _getFileIcon(String filename) {
+    if (filename.endsWith('.dart')) return Icons.flutter_dash;
+    if (filename.endsWith('.js')) return Icons.javascript;
+    if (filename.endsWith('.html')) return Icons.html;
+    if (filename.endsWith('.css')) return Icons.css;
+    if (filename.endsWith('.md')) return Icons.description;
+    if (filename.endsWith('.json')) return Icons.settings;
+    if (filename.endsWith('.txt')) return Icons.text_snippet;
+    return Icons.insert_drive_file;
   }
 
   @override
@@ -137,15 +142,45 @@ class AppTheme {
                           style: TextStyle(color: AppTheme.textSecondary),
                         ),
                         const SizedBox(height: 16),
-                        ElevatedButton.icon(
-                          onPressed: widget.onNewTab,
-                          icon: const Icon(Icons.add),
-                          label: const Text('Create New File'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.accent.withOpacity(0.1),
-                            foregroundColor: AppTheme.accent,
-                            elevation: 0,
-                          ),
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: [
+                            ElevatedButton.icon(
+                              onPressed: widget.onNewTab,
+                              icon: const Icon(Icons.add),
+                              label: const Text('New File'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor:
+                                    AppTheme.accent.withOpacity(0.1),
+                                foregroundColor: AppTheme.accent,
+                                elevation: 0,
+                              ),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: widget.onOpenFile,
+                              icon: const Icon(Icons.file_open),
+                              label: const Text('Open File'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor:
+                                    AppTheme.accent.withOpacity(0.1),
+                                foregroundColor: AppTheme.accent,
+                                elevation: 0,
+                              ),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: widget.onOpenFolder,
+                              icon: const Icon(Icons.folder_open),
+                              label: const Text('Open Folder'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor:
+                                    AppTheme.accent.withOpacity(0.1),
+                                foregroundColor: AppTheme.accent,
+                                elevation: 0,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -156,27 +191,37 @@ class AppTheme {
                       _buildLineNumbers(),
                       const VerticalDivider(width: 1),
                       Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 8.0, top: 8.0),
-                          child: TextField(
-                            controller: _controller,
-                            onChanged: (text) {
-                              if (widget.tabs.isNotEmpty &&
-                                  widget.activeTabIndex < widget.tabs.length) {
-                                String currentFile =
-                                    widget.tabs[widget.activeTabIndex];
-                                _fileContents[currentFile] = text;
-                              }
-                            },
-                            maxLines: null,
-                            expands: true,
-                            style: AppTheme.codeTextStyle,
-                            decoration: const InputDecoration(
-                              border: InputBorder.none,
-                              isDense: true,
-                              contentPadding: EdgeInsets.zero,
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: SizedBox(
+                            width: 2000,
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 8.0, top: 8.0),
+                              child: TextField(
+                                controller: _controller,
+                                scrollController: _editorScrollController,
+                                onChanged: (text) {
+                                  if (widget.tabs.isNotEmpty &&
+                                      widget.activeTabIndex <
+                                          widget.tabs.length) {
+                                    String currentPath =
+                                        widget.tabs[widget.activeTabIndex];
+                                    widget.onContentChanged(currentPath, text);
+                                  }
+                                },
+                                maxLines: null,
+                                expands: true,
+                                style: AppTheme.codeTextStyle,
+                                decoration: const InputDecoration(
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                                keyboardType: TextInputType.multiline,
+                                scrollPadding: const EdgeInsets.only(bottom: 80),
+                                textAlignVertical: TextAlignVertical.top,
+                              ),
                             ),
-                            keyboardType: TextInputType.multiline,
                           ),
                         ),
                       ),
@@ -208,8 +253,11 @@ class AppTheme {
                     Material(color: Colors.transparent, child: child),
                 children: List.generate(widget.tabs.length, (index) {
                   final isSelected = widget.activeTabIndex == index;
+                  final path = widget.tabs[index];
+                  final filename = path.split('/').last;
+
                   return ReorderableDragStartListener(
-                    key: ValueKey(widget.tabs[index]),
+                    key: ValueKey(path),
                     index: index,
                     child: InkWell(
                       onTap: () {
@@ -233,37 +281,32 @@ class AppTheme {
                         child: Row(
                           children: [
                             Icon(
-                              Icons.insert_drive_file,
+                              _getFileIcon(filename),
                               size: 14,
                               color: isSelected
-                                  ? AppTheme.textPrimary
+                                  ? AppTheme.accent
                                   : AppTheme.textSecondary,
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              widget.tabs[index],
+                              filename,
                               style: TextStyle(
                                 color: isSelected
                                     ? AppTheme.textPrimary
                                     : AppTheme.textSecondary,
-                                fontSize: 12,
+                                fontSize: 13,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
                               ),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 8),
                             InkWell(
-                              borderRadius: BorderRadius.circular(2),
-                              onTap: () {
-                                widget.onCloseTab(index);
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.all(2.0),
-                                child: Icon(
-                                  Icons.close,
-                                  size: 14,
-                                  color: isSelected
-                                      ? AppTheme.textPrimary
-                                      : AppTheme.textSecondary,
-                                ),
+                              onTap: () => widget.onCloseTab(index),
+                              child: Icon(
+                                Icons.close,
+                                size: 14,
+                                color: AppTheme.textSecondary,
                               ),
                             ),
                           ],
@@ -275,16 +318,20 @@ class AppTheme {
               ),
             ),
           ),
-          // Plus button at the end of tabs
+          // Tool buttons: Save and New
           Material(
             color: Colors.transparent,
-            child: IconButton(
-              icon: const Icon(Icons.add, size: 18),
-              onPressed: widget.onNewTab,
-              tooltip: 'New Tab',
-              splashRadius: 18,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.add, size: 18),
+                  onPressed: widget.onNewTab,
+                  tooltip: 'New Tab',
+                  splashRadius: 18,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                ),
+              ],
             ),
           ),
         ],
@@ -293,20 +340,35 @@ class AppTheme {
   }
 
   Widget _buildLineNumbers() {
+    final text = _controller.text;
+    final lineCount = text.isEmpty ? 1 : '\n'.allMatches(text).length + 1;
+    const double lineHeight = 21.0;
+
     return Container(
-      width: 40,
-      padding: const EdgeInsets.only(top: 8.0, right: 8.0),
+      width: 48,
       color: AppTheme.sidebarBackground,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: List.generate(
-          20,
-          (index) => Text(
-            '\${index + 1}',
-            style: AppTheme.codeTextStyle.copyWith(
-              color: AppTheme.textSecondary.withOpacity(0.5),
-            ),
-          ),
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: ListView.builder(
+          controller: _lineNumbersScrollController,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: const EdgeInsets.only(top: 8.0, bottom: 100.0),
+          itemCount: lineCount,
+          itemExtent: lineHeight,
+          itemBuilder: (context, index) {
+            return Container(
+              alignment: Alignment.centerRight,
+              padding: const EdgeInsets.only(right: 8.0),
+              child: Text(
+                '${index + 1}',
+                style: AppTheme.codeTextStyle.copyWith(
+                  color: AppTheme.textSecondary.withOpacity(0.4),
+                  fontSize: 14,
+                  height: 1.5,
+                ),
+              ),
+            );
+          },
         ),
       ),
     );

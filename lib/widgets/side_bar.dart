@@ -4,12 +4,18 @@ import '../theme/app_theme.dart';
 class SideBar extends StatefulWidget {
   final String selectedFile;
   final List<String> openTabs;
+  final List<Map<String, dynamic>> folderFiles;
+  final String? folderName;
+  final double width;
   final Function(String) onFileSelected;
 
   const SideBar({
     super.key,
     required this.selectedFile,
     required this.openTabs,
+    required this.folderFiles,
+    this.folderName,
+    required this.width,
     required this.onFileSelected,
   });
 
@@ -23,7 +29,7 @@ class _SideBarState extends State<SideBar> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 250,
+      width: widget.width,
       color: AppTheme.sidebarBackground,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -31,7 +37,7 @@ class _SideBarState extends State<SideBar> {
           Padding(
             padding: const EdgeInsets.all(12.0),
             child: Text(
-              'MY_PROJECT',
+              widget.folderName ?? 'NO FOLDER OPEN',
               style: TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 12,
@@ -48,18 +54,25 @@ class _SideBarState extends State<SideBar> {
                 // Untitled / Open files not in the tree
                 ...widget.openTabs
                     .where((tab) => tab.startsWith('Untitled'))
-                    .map((tab) => _buildFileItem(tab)),
+                    .map((tab) => _buildFileItem(tab, path: tab)),
                 if (widget.openTabs.any((tab) => tab.startsWith('Untitled')))
                   const Divider(height: 1, indent: 16, endIndent: 16),
-                _buildFolderItem('lib'),
-                if (_expandedFolders.contains('lib'))
-                  _buildFileItem('main.dart', indent: 1),
-                _buildFolderItem('src'),
-                if (_expandedFolders.contains('src')) ...[
-                  _buildFileItem('app.dart', indent: 1),
-                  _buildFileItem('main.dart', indent: 1),
+
+                if (widget.folderName != null) ...[
+                  _buildFolderItem(widget.folderName!),
+                  if (_expandedFolders.contains(widget.folderName))
+                    ..._buildTreeNodes(widget.folderFiles, indent: 1),
+                ] else ...[
+                  // Sample data when no folder is open
+                  _buildFolderItem('lib'),
+                  if (_expandedFolders.contains('lib'))
+                    _buildFileItem('main.dart', path: 'main.dart', indent: 1),
+                  _buildFolderItem('src'),
+                  if (_expandedFolders.contains('src')) ...[
+                    _buildFileItem('app.dart', path: 'app.dart', indent: 1),
+                    _buildFileItem('main.dart', path: 'main.dart', indent: 1),
+                  ],
                 ],
-                _buildFolderItem('plugins'),
               ],
             ),
           ),
@@ -68,7 +81,27 @@ class _SideBarState extends State<SideBar> {
     );
   }
 
-  Widget _buildFolderItem(String label) {
+  List<Widget> _buildTreeNodes(List<Map<String, dynamic>> items,
+      {int indent = 0}) {
+    List<Widget> nodes = [];
+    for (var item in items) {
+      if (item['isFolder']) {
+        nodes.add(_buildFolderItem(item['name'], indent: indent));
+        if (_expandedFolders.contains(item['name'])) {
+          nodes.addAll(_buildTreeNodes(
+            List<Map<String, dynamic>>.from(item['children'] ?? []),
+            indent: indent + 1,
+          ));
+        }
+      } else {
+        nodes.add(_buildFileItem(item['name'],
+            path: item['path'], indent: indent));
+      }
+    }
+    return nodes;
+  }
+
+  Widget _buildFolderItem(String label, {int indent = 0}) {
     bool isExpanded = _expandedFolders.contains(label);
     return InkWell(
       onTap: () {
@@ -80,21 +113,22 @@ class _SideBarState extends State<SideBar> {
           }
         });
       },
-      child: _buildTreeItem(Icons.folder, label, isExpanded, isFolder: true),
+      child: _buildTreeItem(Icons.folder, label, isExpanded,
+          isFolder: true, indent: indent),
     );
   }
 
-  Widget _buildFileItem(String label, {int indent = 0}) {
+  Widget _buildFileItem(String label, {required String path, int indent = 0}) {
     return InkWell(
       onTap: () {
-        widget.onFileSelected(label);
+        widget.onFileSelected(path);
       },
       child: _buildTreeItem(
         Icons.insert_drive_file,
         label,
         false,
         indent: indent,
-        isSelected: widget.selectedFile == label,
+        isSelected: widget.selectedFile == path,
       ),
     );
   }
@@ -134,11 +168,15 @@ class _SideBarState extends State<SideBar> {
             color: isFolder ? Colors.blueAccent : AppTheme.textSecondary,
           ),
           const SizedBox(width: 8),
-          Text(
-            label,
-            style: TextStyle(
-              color: isSelected ? AppTheme.accent : AppTheme.textPrimary,
-              fontSize: 13,
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? AppTheme.accent : AppTheme.textPrimary,
+                fontSize: 13,
+              ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
             ),
           ),
         ],
