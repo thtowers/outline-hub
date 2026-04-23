@@ -3,6 +3,8 @@ import '../widgets/header_bar.dart';
 import '../widgets/side_bar.dart';
 import '../widgets/document_view.dart';
 import '../theme/app_theme.dart';
+import '../models/edit_format.dart';
+import '../models/note_metadata.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 
@@ -24,12 +26,33 @@ class _MainWindowState extends State<MainWindow> {
   List<Map<String, dynamic>> _folderFiles = [];
   double _sidebarWidth = 250.0;
   final Map<String, String> _fileContents = {};
+  final Map<String, EditFormat> _tabFormats = {};
+  final Map<String, NoteMetadata> _noteMetadataMap = {};
+  
+  // Tab settings
+  int _tabWidth = 2;
+  bool _autoIndent = true;
+  bool _insertSpaces = true;
+
+  // Status Info
+  int _line = 1;
+  int _column = 1;
+  String _statusMessage = 'Pronto';
+  String _encoding = 'UTF-8';
+
+  void _updatePosition(int line, int column) {
+    setState(() {
+      _line = line;
+      _column = column;
+    });
+  }
 
   void _openFile(String path) {
     setState(() {
       final newTabs = List<String>.from(_openTabs);
       if (!newTabs.contains(path)) {
         newTabs.add(path);
+        _tabFormats[path] = EditFormat.fromPath(path);
         _activeTabIndex = newTabs.length - 1;
       } else {
         _activeTabIndex = newTabs.indexOf(path);
@@ -41,7 +64,9 @@ class _MainWindowState extends State<MainWindow> {
   void _closeTab(int index) {
     setState(() {
       final newTabs = List<String>.from(_openTabs);
-      newTabs.removeAt(index);
+      final String removedPath = newTabs.removeAt(index);
+      _tabFormats.remove(removedPath);
+      
       if (index < _activeTabIndex) {
         _activeTabIndex--;
       } else if (index == _activeTabIndex) {
@@ -70,11 +95,14 @@ class _MainWindowState extends State<MainWindow> {
         newName = 'Untitled-$counter';
       }
       _openTabs.add(newName);
+      _tabFormats[newName] = EditFormat.markdown; // Default for new files
       _activeTabIndex = _openTabs.length - 1;
     });
   }
 
   Future<void> _handleOpenFile() async {
+    if (_isPicking) return;
+    _isPicking = true;
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.any,
@@ -85,13 +113,25 @@ class _MainWindowState extends State<MainWindow> {
         _openFile(path);
       }
     } catch (e) {
-      debugPrint('Error picking file: $e');
+      debugPrint('DocumentView: Error picking file: $e');
+    } finally {
+      _isPicking = false;
     }
   }
 
+  bool _isPicking = false;
   Future<void> _handleOpenFolder() async {
+    if (_isPicking) {
+      debugPrint('DocumentView: Already picking a folder, ignoring request.');
+      return;
+    }
+    
+    _isPicking = true;
+    debugPrint('DocumentView: Requesting directory path from FilePicker...');
+
     try {
       String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
+      debugPrint('DocumentView: FilePicker returned: $selectedDirectory');
 
       if (selectedDirectory != null) {
         setState(() {
@@ -114,7 +154,10 @@ class _MainWindowState extends State<MainWindow> {
         }
       }
     } catch (e) {
-      debugPrint('Error picking directory: $e');
+      debugPrint('DocumentView: Error picking directory: $e');
+    } finally {
+      _isPicking = false;
+      debugPrint('DocumentView: Directory picking process finished.');
     }
   }
 
@@ -122,40 +165,40 @@ class _MainWindowState extends State<MainWindow> {
     debugPrint('SAVE BUTTON CLICKED');
     if (_openTabs.isEmpty) return;
 
+    setState(() {
+      _statusMessage = 'Salvando...';
+    });
+
     String currentPath = _openTabs[_activeTabIndex];
     String content = _fileContents[currentPath] ?? '';
 
     // 1. Show format selection dialog
-    String? extension = await showDialog<String>(
+    EditFormat? chosenFormat = await showDialog<EditFormat>(
       context: context,
       builder: (context) => SimpleDialog(
-        title: const Text('Choose Format'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, '.txt'),
-            child: const Row(
+        title: const Text('Escolher Formato'),
+        children: EditFormat.values.map((format) {
+          return SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, format),
+            child: Row(
               children: [
-                Icon(Icons.text_snippet_outlined, size: 20),
-                SizedBox(width: 12),
-                Text('Text File (.txt)'),
+                Icon(_getFormatIcon(format), size: 20),
+                const SizedBox(width: 12),
+                Text('${format.label} (${format.extension})'),
               ],
             ),
-          ),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, '.md'),
-            child: const Row(
-              children: [
-                Icon(Icons.description_outlined, size: 20),
-                SizedBox(width: 12),
-                Text('Markdown File (.md)'),
-              ],
-            ),
-          ),
-        ],
+          );
+        }).toList(),
       ),
     );
 
-    if (extension == null) return; // User cancelled
+    if (chosenFormat == null) {
+      setState(() {
+        _statusMessage = 'Pronto';
+      });
+      return;
+    } // User cancelled
+    String extension = chosenFormat.extension;
 
     String initialName = currentPath.split('/').last;
     // Strip old extension if any
@@ -167,7 +210,7 @@ class _MainWindowState extends State<MainWindow> {
     try {
       debugPrint('Opening save dialog for $extension...');
       String? outputFile = await FilePicker.platform.saveFile(
-        dialogTitle: 'Save File As',
+        dialogTitle: 'Salvar Arquivo Como',
         fileName: initialName,
         type: FileType.any,
       );
@@ -175,7 +218,7 @@ class _MainWindowState extends State<MainWindow> {
       if (outputFile != null) {
         String finalPath = outputFile;
         // Force the chosen extension if missing
-        if (!finalPath.endsWith('.txt') && !finalPath.endsWith('.md')) {
+        if (!finalPath.endsWith(extension)) {
           finalPath += extension;
         }
 
@@ -185,16 +228,24 @@ class _MainWindowState extends State<MainWindow> {
         setState(() {
           _openTabs[_activeTabIndex] = finalPath;
           _fileContents[finalPath] = content;
+          _statusMessage = 'Pronto';
         });
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('File saved successfully: $finalPath')),
+            SnackBar(content: Text('Arquivo salvo com sucesso: $finalPath')),
           );
         }
+      } else {
+        setState(() {
+          _statusMessage = 'Pronto';
+        });
       }
     } catch (e) {
       debugPrint('Error saving file: $e');
+      setState(() {
+        _statusMessage = 'Erro ao salvar';
+      });
     }
   }
 
@@ -205,7 +256,7 @@ class _MainWindowState extends State<MainWindow> {
       for (var entity in entities) {
         String name = entity.path.split('/').last;
         // Skip heavy or hidden folders
-        if (name == 'node_modules' || name == '.git' || name == '.dart_tool') {
+        if (name == 'node_modules' || name == '.git' || name == '.dart_tool' || name.startsWith('.')) {
           continue;
         }
 
@@ -214,7 +265,7 @@ class _MainWindowState extends State<MainWindow> {
           'name': name,
           'path': entity.path,
           'isFolder': isFolder,
-          'children': isFolder ? await _buildTree(entity) : null,
+          'children': null, // Do not load children recursively
         });
       }
       // Sort: Folders first, then files
@@ -224,7 +275,7 @@ class _MainWindowState extends State<MainWindow> {
         return a['name'].toLowerCase().compareTo(b['name'].toLowerCase());
       });
     } catch (e) {
-      // Handle permission errors or deleted folders
+      debugPrint('Error building tree: $e');
     }
     return tree;
   }
@@ -274,6 +325,23 @@ class _MainWindowState extends State<MainWindow> {
             onTerminalToggle: () => _toggleRightPanel('terminal'),
             onNewTab: _handleNewTab,
             onSave: _handleSaveFile,
+            onOpenFolder: _handleOpenFolder,
+            tabWidth: _tabWidth,
+            autoIndent: _autoIndent,
+            insertSpaces: _insertSpaces,
+            currentFormat: _openTabs.isNotEmpty
+                ? _tabFormats[_openTabs[_activeTabIndex]] ?? EditFormat.txt
+                : EditFormat.txt,
+            onTabWidthChanged: (val) => setState(() => _tabWidth = val),
+            onAutoIndentChanged: (val) => setState(() => _autoIndent = val),
+            onInsertSpacesChanged: (val) => setState(() => _insertSpaces = val),
+            onFormatChanged: (format) {
+              if (_openTabs.isNotEmpty) {
+                setState(() {
+                  _tabFormats[_openTabs[_activeTabIndex]] = format;
+                });
+              }
+            },
           ),
           const Divider(height: 1),
           // Main Content Area
@@ -325,9 +393,20 @@ class _MainWindowState extends State<MainWindow> {
                     onOpenFile: _handleOpenFile,
                     onOpenFolder: _handleOpenFolder,
                     onSaveFile: _handleSaveFile,
+                    tabWidth: _tabWidth,
+                    autoIndent: _autoIndent,
+                    insertSpaces: _insertSpaces,
+                    noteMetadataMap: _noteMetadataMap,
+                    onMetadataChanged: (path, meta) {
+                      setState(() => _noteMetadataMap[path] = meta);
+                    },
+                    currentFormat: _openTabs.isNotEmpty
+                        ? _tabFormats[_openTabs[_activeTabIndex]]
+                        : null,
                     onContentChanged: (path, content) {
                       _fileContents[path] = content;
                     },
+                    onPositionChanged: _updatePosition,
                   ),
                 ),
                 if (_showRightPanel) ...[
@@ -365,12 +444,15 @@ class _MainWindowState extends State<MainWindow> {
                     fontSize: 13,
                   ),
                 ),
-                InkWell(
-                  onTap: () => setState(() => _showRightPanel = false),
-                  child: Icon(
-                    Icons.close,
-                    size: 16,
-                    color: AppTheme.textSecondary,
+                Tooltip(
+                  message: 'Fechar Painel',
+                  child: InkWell(
+                    onTap: () => setState(() => _showRightPanel = false),
+                    child: Icon(
+                      Icons.close,
+                      size: 16,
+                      color: AppTheme.textSecondary,
+                    ),
                   ),
                 ),
               ],
@@ -392,6 +474,45 @@ class _MainWindowState extends State<MainWindow> {
     );
   }
 
+  void _showFormatSelectionDialog() {
+    if (_openTabs.isEmpty) return;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return SimpleDialog(
+          title: const Text('Select Format'),
+          children: EditFormat.values.map((format) {
+            return SimpleDialogOption(
+              onPressed: () {
+                setState(() {
+                  _tabFormats[_openTabs[_activeTabIndex]] = format;
+                });
+                Navigator.pop(context);
+              },
+              child: Row(
+                children: [
+                  Icon(_getFormatIcon(format), size: 20),
+                  const SizedBox(width: 12),
+                  Text(format.label),
+                ],
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  IconData _getFormatIcon(EditFormat format) {
+    switch (format) {
+      case EditFormat.markdown:
+        return Icons.description_outlined;
+      case EditFormat.txt:
+        return Icons.text_snippet_outlined;
+    }
+  }
+
   Widget _buildStatusBar() {
     return Container(
       height: 24,
@@ -400,29 +521,68 @@ class _MainWindowState extends State<MainWindow> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            'Ready',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
-          ),
           Row(
             children: [
-              Text(
-                'Line 1, Column 1',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+              Icon(
+                _statusMessage == 'Pronto' ? Icons.check_circle_outline : Icons.sync,
+                size: 14,
+                color: _statusMessage == 'Pronto' ? Colors.green : AppTheme.accent,
               ),
-              const SizedBox(width: 24),
+              const SizedBox(width: 8),
               Text(
-                'Dart',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
-              ),
-              const SizedBox(width: 24),
-              Text(
-                'UTF-8',
+                _statusMessage,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
               ),
             ],
           ),
+          Row(
+            children: [
+              Text(
+                'Lin $_line, Col $_column',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+              ),
+              const SizedBox(width: 24),
+              InkWell(
+                onTap: () {
+                  _showFormatSelectionDialog();
+                },
+                child: Text(
+                  _openTabs.isNotEmpty
+                      ? (_tabFormats[_openTabs[_activeTabIndex]]?.label ??
+                          'Texto Simples')
+                      : 'Texto Simples',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                ),
+              ),
+              const SizedBox(width: 24),
+              InkWell(
+                onTap: _showEncodingSelectionDialog,
+                child: Text(
+                  _encoding,
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                ),
+              ),
+            ],
+          ),
         ],
+      ),
+    );
+  }
+
+  void _showEncodingSelectionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Selecionar Codificação'),
+        children: ['UTF-8', 'ISO-8859-1', 'Windows-1252', 'ASCII'].map((enc) {
+          return SimpleDialogOption(
+            onPressed: () {
+              setState(() => _encoding = enc);
+              Navigator.pop(context);
+            },
+            child: Text(enc),
+          );
+        }).toList(),
       ),
     );
   }

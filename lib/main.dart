@@ -1,10 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:appflowy_editor/appflowy_editor.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/main_window.dart';
 import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize FFI
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
+
   // Must add this line.
   await windowManager.ensureInitialized();
 
@@ -14,7 +22,7 @@ void main() async {
     backgroundColor: Colors.transparent,
     skipTaskbar: false,
     titleBarStyle: TitleBarStyle.normal,
-    minimumSize: Size(800, 600),
+    minimumSize: Size(900, 600),
   );
   
   windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -34,6 +42,13 @@ class FlutterCodeApp extends StatelessWidget {
       title: 'Flutter Code',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
+      localizationsDelegates: const [
+        AppFlowyEditorLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [Locale('en')],
       home: const MainWindow(),
     );
   }

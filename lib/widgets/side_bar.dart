@@ -28,7 +28,45 @@ class SideBar extends StatefulWidget {
 }
 
 class _SideBarState extends State<SideBar> {
-  final Set<String> _expandedFolders = {'src', 'lib'};
+  final Set<String> _expandedFolders = {};
+  final Map<String, List<Map<String, dynamic>>> _subFolderCache = {};
+
+  Future<void> _loadSubFolder(String path, String label) async {
+    if (_subFolderCache.containsKey(path)) return;
+
+    try {
+      final dir = Directory(path);
+      final List<FileSystemEntity> entities = await dir.list().toList();
+      List<Map<String, dynamic>> children = [];
+
+      for (var entity in entities) {
+        String name = entity.path.split('/').last;
+        if (name == 'node_modules' || name == '.git' || name == '.dart_tool' || name.startsWith('.')) {
+          continue;
+        }
+        children.add({
+          'name': name,
+          'path': entity.path,
+          'isFolder': entity is Directory,
+          'children': null,
+        });
+      }
+
+      children.sort((a, b) {
+        if (a['isFolder'] && !b['isFolder']) return -1;
+        if (!a['isFolder'] && b['isFolder']) return 1;
+        return a['name'].toLowerCase().compareTo(b['name'].toLowerCase());
+      });
+
+      if (mounted) {
+        setState(() {
+          _subFolderCache[path] = children;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading subfolder: $e');
+    }
+  }
 
   void _showContextMenu(BuildContext context, Offset globalPosition, String path, bool isFolder) async {
     final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
@@ -116,8 +154,8 @@ class _SideBarState extends State<SideBar> {
 
                 if (widget.folderName != null) ...[
                   _buildFolderItem(widget.folderName!, path: widget.folderPath),
-                  if (_expandedFolders.contains(widget.folderName))
-                    ..._buildTreeNodes(widget.folderFiles, indent: 1),
+                  if (_expandedFolders.contains(widget.folderPath ?? widget.folderName))
+                    ..._buildTreeNodes(_subFolderCache[widget.folderPath] ?? widget.folderFiles, indent: 1),
                 ] else ...[
                   Center(
                     child: Padding(
@@ -146,9 +184,9 @@ class _SideBarState extends State<SideBar> {
     for (var item in items) {
       if (item['isFolder']) {
         nodes.add(_buildFolderItem(item['name'], indent: indent, path: item['path']));
-        if (_expandedFolders.contains(item['name'])) {
+        if (_expandedFolders.contains(item['path'])) {
           nodes.addAll(_buildTreeNodes(
-            List<Map<String, dynamic>>.from(item['children'] ?? []),
+            _subFolderCache[item['path']] ?? [],
             indent: indent + 1,
           ));
         }
@@ -161,14 +199,19 @@ class _SideBarState extends State<SideBar> {
   }
 
   Widget _buildFolderItem(String label, {int indent = 0, String? path}) {
-    bool isExpanded = _expandedFolders.contains(label);
+    final folderKey = path ?? label;
+    bool isExpanded = _expandedFolders.contains(folderKey);
     return InkWell(
       onTap: () {
+        final folderKey = path ?? label;
         setState(() {
           if (isExpanded) {
-            _expandedFolders.remove(label);
+            _expandedFolders.remove(folderKey);
           } else {
-            _expandedFolders.add(label);
+            _expandedFolders.add(folderKey);
+            if (path != null) {
+              _loadSubFolder(path, label);
+            }
           }
         });
       },
