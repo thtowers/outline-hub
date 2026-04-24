@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/edit_format.dart';
+import '../controllers/text_style_controller.dart';
+import 'text_style_toolbar.dart';
 
 class HeaderBar extends StatelessWidget {
   final VoidCallback? onSearchToggle;
@@ -8,6 +10,7 @@ class HeaderBar extends StatelessWidget {
   final VoidCallback? onNewTab;
   final VoidCallback? onSave;
   final VoidCallback? onOpenFolder;
+  final VoidCallback? onOpenFile;
 
   // Tab settings
   final int tabWidth;
@@ -18,6 +21,9 @@ class HeaderBar extends StatelessWidget {
   final ValueChanged<bool> onAutoIndentChanged;
   final ValueChanged<bool> onInsertSpacesChanged;
   final ValueChanged<EditFormat> onFormatChanged;
+  final TextStyleController textStyleController;
+  final VoidCallback? onZenModeToggle;
+  final VoidCallback? onSettingsToggle;
 
   const HeaderBar({
     super.key,
@@ -26,6 +32,7 @@ class HeaderBar extends StatelessWidget {
     this.onNewTab,
     this.onSave,
     this.onOpenFolder,
+    this.onOpenFile,
     required this.tabWidth,
     required this.autoIndent,
     required this.insertSpaces,
@@ -34,6 +41,9 @@ class HeaderBar extends StatelessWidget {
     required this.onAutoIndentChanged,
     required this.onInsertSpacesChanged,
     required this.onFormatChanged,
+    required this.textStyleController,
+    this.onZenModeToggle,
+    this.onSettingsToggle,
   });
 
   @override
@@ -50,7 +60,6 @@ class HeaderBar extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-
                 IconButton(
                   icon: const Icon(Icons.folder_open_outlined, size: 20),
                   onPressed: onOpenFolder ?? () {},
@@ -58,19 +67,24 @@ class HeaderBar extends StatelessWidget {
                   tooltip: 'Abrir Pasta',
                 ),
                 IconButton(
+                  icon: const Icon(Icons.file_open_outlined, size: 20),
+                  onPressed: onOpenFile ?? () {},
+                  splashRadius: 20,
+                  tooltip: 'Abrir Arquivo',
+                ),
+                IconButton(
                   icon: const Icon(Icons.save_outlined, size: 20),
                   onPressed: onSave ?? () {},
                   splashRadius: 20,
                   tooltip: 'Salvar Arquivo (Ctrl+S)',
                 ),
-
               ],
             ),
 
             Flexible(
               child: Container(
                 height: 32,
-                constraints: const BoxConstraints(maxWidth: 400),
+                constraints: const BoxConstraints(maxWidth: 800),
                 decoration: BoxDecoration(
                   color: AppTheme.background,
                   borderRadius: BorderRadius.circular(4),
@@ -86,6 +100,11 @@ class HeaderBar extends StatelessWidget {
                       _buildTabSettingButton(context),
                       const VerticalDivider(width: 1),
                       _buildFormatSettingButton(context),
+                      const VerticalDivider(width: 1),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: TextStyleToolbar(controller: textStyleController),
+                      ),
                     ],
                   ),
                 ),
@@ -98,17 +117,16 @@ class HeaderBar extends StatelessWidget {
               children: [
                 IconButton(
                   icon: const Icon(Icons.settings_outlined, size: 20),
-                  onPressed: () {},
+                  onPressed: onSettingsToggle ?? () {},
                   splashRadius: 20,
                   tooltip: 'Configurações do Editor',
                 ),
                 const SizedBox(width: 4),
-                const Tooltip(
-                  message: 'Alternar Tela Cheia',
-                  child: Padding(
-                    padding: EdgeInsets.all(8.0),
-                    child: Icon(Icons.open_in_full, size: 16),
-                  ),
+                IconButton(
+                  icon: const Icon(Icons.open_in_full, size: 18),
+                  onPressed: onZenModeToggle ?? () {},
+                  splashRadius: 20,
+                  tooltip: 'Alternar Tela Cheia',
                 ),
                 const SizedBox(width: 4),
               ],
@@ -244,8 +262,6 @@ class HeaderBar extends StatelessWidget {
         return Icons.text_snippet_outlined;
     }
   }
-
-
 
   void _showTabSettings(BuildContext context) {
     // Capture local state for the dialog to ensure immediate UI updates

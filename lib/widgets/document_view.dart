@@ -12,6 +12,7 @@ import '../theme/app_theme.dart';
 import 'dart:io';
 import '../models/edit_format.dart';
 import '../models/note_metadata.dart';
+import '../controllers/text_style_controller.dart';
 import 'package:appflowy_editor/appflowy_editor.dart';
 
 class DocumentView extends StatefulWidget {
@@ -33,6 +34,7 @@ class DocumentView extends StatefulWidget {
   final Map<String, NoteMetadata> noteMetadataMap;
   final Function(String, NoteMetadata) onMetadataChanged;
   final void Function(int line, int column)? onPositionChanged;
+  final TextStyleController textStyleController;
 
   const DocumentView({
     super.key,
@@ -52,6 +54,7 @@ class DocumentView extends StatefulWidget {
     required this.insertSpaces,
     required this.noteMetadataMap,
     required this.onMetadataChanged,
+    required this.textStyleController,
     this.onPositionChanged,
     this.currentFormat,
   });
@@ -73,6 +76,8 @@ class _DocumentViewState extends State<DocumentView> {
   // For note header (title + description)
   late TextEditingController _titleController;
   late TextEditingController _descController;
+  bool _isApplyingStyle = false;
+  Timer? _debounceTimer;
 
   @override
   void initState() {
@@ -98,6 +103,114 @@ class _DocumentViewState extends State<DocumentView> {
     _titleController = TextEditingController();
     _descController = TextEditingController();
     _loadCurrentTab();
+    _setupStyleController();
+    widget.textStyleController.addListener(_onStyleChanged);
+  }
+
+
+  void _setupStyleController() {
+    debugPrint('DocumentView: Setting up Style Controller callbacks');
+    final ctrl = widget.textStyleController;
+
+    ctrl.onToggleBold = () {
+      if (_editorState != null) {
+        final selection = _editorState!.selection;
+        if (selection != null) {
+          _isApplyingStyle = true;
+          _debounceTimer?.cancel();
+          _debounceTimer = Timer(const Duration(milliseconds: 1000), () {
+            _isApplyingStyle = false;
+          });
+          _editorState!.toggleAttribute('bold', selection: selection);
+        }
+      } else {
+        setState(() {});
+      }
+    };
+
+    ctrl.onToggleItalic = () {
+      if (_editorState != null) {
+        final selection = _editorState!.selection;
+        if (selection != null) {
+          _isApplyingStyle = true;
+          _debounceTimer?.cancel();
+          _debounceTimer = Timer(const Duration(milliseconds: 1000), () {
+            _isApplyingStyle = false;
+          });
+          _editorState!.toggleAttribute('italic', selection: selection);
+        }
+      } else {
+        setState(() {});
+      }
+    };
+
+    ctrl.onApplyFontSize = (size) {
+      if (_editorState != null) {
+        final selection = _editorState!.selection;
+        if (selection != null) {
+          _isApplyingStyle = true;
+          _debounceTimer?.cancel();
+          // Aumentamos para 1 segundo para garantir que o editor processe a transação
+          _debounceTimer = Timer(const Duration(milliseconds: 1000), () {
+            _isApplyingStyle = false;
+          });
+
+          _editorState!.formatDelta(
+            selection,
+            {'font_size': size.toDouble()},
+          );
+        }
+      } else {
+        setState(() {});
+      }
+    };
+
+    ctrl.onInsertDivider = () {
+      if (_editorState != null) {
+        final selection = _editorState!.selection;
+        if (selection != null) {
+          final transaction = _editorState!.transaction;
+          final path = selection.end.path;
+          final nextPath = path.next;
+          
+          // Inserimos o divisor e o parágrafo em sequência
+          transaction.insertNodes(
+            nextPath,
+            [
+              Node(type: 'divider', attributes: {}),
+              Node(type: 'paragraph', attributes: {'delta': []}),
+            ],
+          );
+          
+          // Move o cursor para o início do novo parágrafo (que agora está em nextPath + 1)
+          final newParagraphPath = nextPath.next;
+          transaction.afterSelection = Selection.collapsed(
+            Position(path: newParagraphPath, offset: 0),
+          );
+          
+          _editorState!.apply(transaction);
+        }
+      } else {
+        // Implementação para Texto Simples (Plain Text)
+        final text = _plainTextController.text;
+        final selection = _plainTextController.selection;
+        const divider = '\n--------------------------------------------------\n';
+        
+        if (selection.isValid) {
+          final newText = text.replaceRange(selection.start, selection.end, divider);
+          _plainTextController.value = TextEditingValue(
+            text: newText,
+            selection: TextSelection.collapsed(offset: selection.start + divider.length),
+          );
+        } else {
+          _plainTextController.text += divider;
+        }
+      }
+    };
+  }
+
+  void _onStyleChanged() {
+    if (mounted) setState(() {});
   }
 
   bool get _isMarkdown {
@@ -176,29 +289,78 @@ class _DocumentViewState extends State<DocumentView> {
       _editorSubscription = _editorState!.transactionStream.listen((value) {
         final (time, transaction, options) = value;
         if (time == TransactionTime.after) {
-          if (!mounted) return;
-          if (widget.tabs.isEmpty) return;
+          if (!mounted) {
+            return;
+          }
+          if (widget.tabs.isEmpty) {
+            return;
+          }
           final currentPath = widget.tabs[widget.activeTabIndex];
           final markdown = documentToMarkdown(_editorState!.document);
           widget.onContentChanged(currentPath, markdown);
         }
       });
 
-      // Selection listener for Line/Col
+      // Selection listener for Line/Col and Style Detection
       _editorState!.selectionNotifier.addListener(() {
+        final selection = _editorState!.selection;
+        if (selection == null) {
+          return;
+        }
+
+        // 1. Update Position (Line/Col)
         if (widget.onPositionChanged != null) {
+          int lineIndex = 0;
+          final currentPath = selection.start.path;
+          if (currentPath.isNotEmpty) {
+            lineIndex = currentPath.first + 1;
+          }
+          widget.onPositionChanged!(lineIndex, selection.start.offset + 1);
+        }
+
+        // 2. Detect Styles in Selection (Detectando Atributos Inline)
+        if (_isApplyingStyle) return; // Ignora se estivermos aplicando um estilo manualmente
+        
+        final styles = _editorState!.getDeltaAttributesInSelectionStart() ?? {};
+        
+        // Font Size detection (Chave oficial: font_size)
+        final fontSizeVal = styles['font_size'] ?? styles['fontSize'];
+        double fontSize = 16.0; // Sincronizado com o padrão do editor
+        
+        if (fontSizeVal is num) {
+          fontSize = fontSizeVal.toDouble();
+        } else if (fontSizeVal is String) {
+          fontSize = double.tryParse(fontSizeVal) ?? 14.0;
+        } else {
+          // Se não houver font_size inline, checamos se é um Heading para mostrar o tamanho estimado
           final selection = _editorState!.selection;
           if (selection != null) {
-            int lineIndex = 0;
-            
-            final currentPath = selection.start.path;
-            if (currentPath.isNotEmpty) {
-              lineIndex = currentPath.first + 1;
+            final path = selection.start.path;
+            if (path.isNotEmpty) {
+              final node = _editorState!.document.nodeAtPath(path);
+              if (node != null && node.type == 'heading') {
+                final level = node.attributes['level'];
+                if (level == 1) {
+                  fontSize = 28.0;
+                } else if (level == 2) {
+                  fontSize = 22.0;
+                } else if (level == 3) {
+                  fontSize = 18.0;
+                }
+              }
             }
-            
-            widget.onPositionChanged!(lineIndex, selection.start.offset + 1);
           }
         }
+
+        final isBold = styles['bold'] == true;
+        final isItalic = styles['italic'] == true;
+        
+        // Sincroniza a barra superior
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            widget.textStyleController.updateFromSelection(fontSize, isBold, isItalic);
+          }
+        });
       });
     } catch (e, stack) {
       debugPrint('DocumentView: Error loading markdown: $e');
@@ -214,6 +376,12 @@ class _DocumentViewState extends State<DocumentView> {
   @override
   void didUpdateWidget(DocumentView oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.textStyleController != widget.textStyleController) {
+      oldWidget.textStyleController.removeListener(_onStyleChanged);
+      _setupStyleController();
+      widget.textStyleController.addListener(_onStyleChanged);
+    }
 
     final oldPath = oldWidget.tabs.isNotEmpty &&
             oldWidget.activeTabIndex < oldWidget.tabs.length
@@ -257,6 +425,7 @@ class _DocumentViewState extends State<DocumentView> {
     _titleController.dispose();
     _descController.dispose();
     _editorSubscription?.cancel();
+    widget.textStyleController.removeListener(_onStyleChanged);
     super.dispose();
   }
 
@@ -514,9 +683,11 @@ class _DocumentViewState extends State<DocumentView> {
       selectionColor: AppTheme.accent.withValues(alpha: 0.3),
       textStyleConfiguration: TextStyleConfiguration(
         text: AppTheme.codeTextStyle.copyWith(
-          fontSize: 15,
+          fontSize: 16, // Tamanho base fixo para Markdown. Alterações via toolbar serão por seleção.
           height: 1.5,
           color: AppTheme.textPrimary,
+          fontWeight: FontWeight.normal,
+          fontStyle: FontStyle.normal,
         ),
         bold: const TextStyle(fontWeight: FontWeight.bold),
         italic: const TextStyle(fontStyle: FontStyle.italic),
@@ -620,28 +791,21 @@ class _DocumentViewState extends State<DocumentView> {
       getDescription: () => 'Insert tab or spaces',
     );
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _buildNoteHeader(path, metadata),
-        Expanded(
-          child: AppFlowyEditor(
-            editorState: _editorState!,
-            editorStyle: editorStyle,
-            autoFocus: false,
-            editable: true,
-            characterShortcutEvents: [
-              customInsertNewLine,
-              ...standardCharacterShortcutEvents
-                  .where((e) => e.character != '\n'),
-            ],
+    return AppFlowyEditor(
+      editorState: _editorState!,
+      editorStyle: editorStyle,
+      autoFocus: false,
+      editable: true,
+      header: _buildNoteHeader(path, metadata),
+      characterShortcutEvents: [
+        customInsertNewLine,
+        ...standardCharacterShortcutEvents
+            .where((e) => e.character != '\n'),
+      ],
             commandShortcutEvents: [
               customTabCommand,
               ...standardCommandShortcutEvents.where((e) => e.key != 'indent'),
             ],
-          ),
-        ),
-      ],
     );
   }
 
@@ -751,7 +915,11 @@ class _DocumentViewState extends State<DocumentView> {
           },
           maxLines: null,
           expands: true,
-          style: AppTheme.codeTextStyle,
+          style: AppTheme.codeTextStyle.copyWith(
+            fontSize: widget.textStyleController.fontSize,
+            fontWeight: widget.textStyleController.isBold ? FontWeight.bold : FontWeight.normal,
+            fontStyle: widget.textStyleController.isItalic ? FontStyle.italic : FontStyle.normal,
+          ),
           decoration: const InputDecoration(
             border: InputBorder.none,
             isDense: true,

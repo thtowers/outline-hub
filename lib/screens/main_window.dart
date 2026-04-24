@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../widgets/header_bar.dart';
 import '../widgets/side_bar.dart';
 import '../widgets/document_view.dart';
 import '../theme/app_theme.dart';
 import '../models/edit_format.dart';
 import '../models/note_metadata.dart';
+import '../controllers/text_style_controller.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 
@@ -18,6 +20,7 @@ class MainWindow extends StatefulWidget {
 class _MainWindowState extends State<MainWindow> {
   bool _showRightPanel = false;
   String _rightPanelType = '';
+  bool _isZenMode = false;
 
   List<String> _openTabs = [];
   int _activeTabIndex = 0;
@@ -39,6 +42,7 @@ class _MainWindowState extends State<MainWindow> {
   int _column = 1;
   String _statusMessage = 'Pronto';
   String _encoding = 'UTF-8';
+  final _textStyleController = TextStyleController();
 
   void _updatePosition(int line, int column) {
     setState(() {
@@ -315,71 +319,94 @@ class _MainWindowState extends State<MainWindow> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return KeyboardListener(
+      focusNode: FocusNode(),
+      onKeyEvent: (event) {
+        if (_isZenMode && event.logicalKey == LogicalKeyboardKey.escape) {
+          setState(() => _isZenMode = false);
+        }
+        
+        // Atalho Alt + D para Divisor
+        if (event is KeyDownEvent && 
+            HardwareKeyboard.instance.isAltPressed && 
+            event.logicalKey == LogicalKeyboardKey.keyD) {
+          _textStyleController.insertDivider();
+        }
+      },
+      child: Scaffold(
       backgroundColor: AppTheme.background,
       body: Column(
         children: [
           // Top HeaderBar (replaces window title bar on custom desktop builds)
-          HeaderBar(
-            onSearchToggle: () => _toggleRightPanel('search'),
-            onTerminalToggle: () => _toggleRightPanel('terminal'),
-            onNewTab: _handleNewTab,
-            onSave: _handleSaveFile,
-            onOpenFolder: _handleOpenFolder,
-            tabWidth: _tabWidth,
-            autoIndent: _autoIndent,
-            insertSpaces: _insertSpaces,
-            currentFormat: _openTabs.isNotEmpty
-                ? _tabFormats[_openTabs[_activeTabIndex]] ?? EditFormat.txt
-                : EditFormat.txt,
-            onTabWidthChanged: (val) => setState(() => _tabWidth = val),
-            onAutoIndentChanged: (val) => setState(() => _autoIndent = val),
-            onInsertSpacesChanged: (val) => setState(() => _insertSpaces = val),
-            onFormatChanged: (format) {
-              if (_openTabs.isNotEmpty) {
-                setState(() {
-                  _tabFormats[_openTabs[_activeTabIndex]] = format;
-                });
-              }
-            },
-          ),
-          const Divider(height: 1),
+          // Top HeaderBar (replaces window title bar on custom desktop builds)
+          if (!_isZenMode) ...[
+            HeaderBar(
+              onSearchToggle: () => _toggleRightPanel('search'),
+              onTerminalToggle: () => _toggleRightPanel('terminal'),
+              onNewTab: _handleNewTab,
+              onSave: _handleSaveFile,
+              onOpenFolder: _handleOpenFolder,
+              onOpenFile: _handleOpenFile,
+              tabWidth: _tabWidth,
+              autoIndent: _autoIndent,
+              insertSpaces: _insertSpaces,
+              currentFormat: _openTabs.isNotEmpty
+                  ? _tabFormats[_openTabs[_activeTabIndex]] ?? EditFormat.txt
+                  : EditFormat.txt,
+              onTabWidthChanged: (val) => setState(() => _tabWidth = val),
+              onAutoIndentChanged: (val) => setState(() => _autoIndent = val),
+              onInsertSpacesChanged: (val) => setState(() => _insertSpaces = val),
+              onFormatChanged: (format) {
+                if (_openTabs.isNotEmpty) {
+                  setState(() {
+                    _tabFormats[_openTabs[_activeTabIndex]] = format;
+                  });
+                }
+              },
+              textStyleController: _textStyleController,
+              onZenModeToggle: () => setState(() => _isZenMode = !_isZenMode),
+              onSettingsToggle: _showSettingsDialog,
+            ),
+            const Divider(height: 1),
+          ],
           // Main Content Area
           Expanded(
             child: Row(
               children: [
                 // Left Sidebar (File Explorer)
-                SideBar(
-                  selectedFile: _openTabs.isNotEmpty
-                      ? _openTabs[_activeTabIndex]
-                      : '',
-                  openTabs: _openTabs,
-                  folderName: _openedFolderName,
-                  folderPath: _openedFolderPath,
-                  folderFiles: _folderFiles,
-                  width: _sidebarWidth,
-                  onFileSelected: _openFile,
-                ),
-                // Resizable Divider
-                MouseRegion(
-                  cursor: SystemMouseCursors.resizeLeftRight,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onHorizontalDragUpdate: (details) {
-                      setState(() {
-                        _sidebarWidth += details.delta.dx;
-                        // Constraints
-                        if (_sidebarWidth < 120) _sidebarWidth = 120;
-                        if (_sidebarWidth > 600) _sidebarWidth = 600;
-                      });
-                    },
-                    child: Container(
-                      width: 4,
-                      color: Colors.black.withValues(alpha: 0.1),
+                if (!_isZenMode) ...[
+                  SideBar(
+                    selectedFile: _openTabs.isNotEmpty
+                        ? _openTabs[_activeTabIndex]
+                        : '',
+                    openTabs: _openTabs,
+                    folderName: _openedFolderName,
+                    folderPath: _openedFolderPath,
+                    folderFiles: _folderFiles,
+                    width: _sidebarWidth,
+                    onFileSelected: _openFile,
+                  ),
+                  // Resizable Divider
+                  MouseRegion(
+                    cursor: SystemMouseCursors.resizeLeftRight,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onHorizontalDragUpdate: (details) {
+                        setState(() {
+                          _sidebarWidth += details.delta.dx;
+                          // Constraints
+                          if (_sidebarWidth < 120) _sidebarWidth = 120;
+                          if (_sidebarWidth > 600) _sidebarWidth = 600;
+                        });
+                      },
+                      child: Container(
+                        width: 4,
+                        color: Colors.black.withValues(alpha: 0.1),
+                      ),
                     ),
                   ),
-                ),
-                const VerticalDivider(width: 1),
+                  const VerticalDivider(width: 1),
+                ],
                 // Center Document View
                 Expanded(
                   child: DocumentView(
@@ -407,6 +434,7 @@ class _MainWindowState extends State<MainWindow> {
                       _fileContents[path] = content;
                     },
                     onPositionChanged: _updatePosition,
+                    textStyleController: _textStyleController,
                   ),
                 ),
                 if (_showRightPanel) ...[
@@ -417,9 +445,21 @@ class _MainWindowState extends State<MainWindow> {
             ),
           ),
           // Bottom Status Bar
-          const Divider(height: 1),
-          _buildStatusBar(),
+          if (!_isZenMode) ...[
+            const Divider(height: 1),
+            _buildStatusBar(),
+          ],
         ],
+      ),
+      // Floating Exit button for Zen Mode
+      floatingActionButton: _isZenMode 
+        ? FloatingActionButton.small(
+            onPressed: () => setState(() => _isZenMode = false),
+            backgroundColor: AppTheme.accent,
+            tooltip: 'Sair da Tela Cheia',
+            child: const Icon(Icons.fullscreen_exit, size: 20, color: Colors.white),
+          )
+        : null,
       ),
     );
   }
@@ -565,6 +605,122 @@ class _MainWindowState extends State<MainWindow> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  void _showSettingsDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return DefaultTabController(
+          length: 2,
+          child: AlertDialog(
+            backgroundColor: AppTheme.surface,
+            title: Text(
+              'Configurações',
+              style: TextStyle(color: AppTheme.textPrimary),
+            ),
+            content: SizedBox(
+              width: 500,
+              height: 400,
+              child: Column(
+                children: [
+                  TabBar(
+                    indicatorColor: AppTheme.accent,
+                    labelColor: AppTheme.accent,
+                    unselectedLabelColor: AppTheme.textSecondary,
+                    tabs: const [
+                      Tab(text: 'Geral'),
+                      Tab(text: 'Atalhos'),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        // Aba Geral
+                        ListView(
+                          children: [
+                            _buildSettingItem(
+                              'Tema',
+                              'Escuro (Padrão)',
+                              Icons.palette_outlined,
+                            ),
+                            _buildSettingItem(
+                              'Auto-salvamento',
+                              'Ativado (a cada 30s)',
+                              Icons.save_outlined,
+                            ),
+                          ],
+                        ),
+                        // Aba Atalhos
+                        ListView(
+                          children: [
+                            _buildShortcutItem(
+                              'Inserir Linha (Divisor)',
+                              'Alt + D',
+                              Icons.horizontal_rule,
+                            ),
+                            _buildShortcutItem(
+                              'Modo Zen (Tela Cheia)',
+                              'Esc para Sair',
+                              Icons.fullscreen_exit,
+                            ),
+                            _buildShortcutItem(
+                              'Salvar Arquivo',
+                              'Ctrl + S',
+                              Icons.save,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('Fechar', style: TextStyle(color: AppTheme.accent)),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSettingItem(String title, String value, IconData icon) {
+    return ListTile(
+      leading: Icon(icon, color: AppTheme.textSecondary, size: 20),
+      title: Text(title, style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+      subtitle: Text(value, style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+      trailing: Icon(Icons.chevron_right, color: AppTheme.textSecondary, size: 16),
+    );
+  }
+
+  Widget _buildShortcutItem(String title, String keys, IconData icon) {
+    return ListTile(
+      leading: Icon(icon, color: AppTheme.textSecondary, size: 20),
+      title: Text(title, style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+      trailing: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: AppTheme.background,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: AppTheme.textSecondary.withValues(alpha: 0.2)),
+        ),
+        child: Text(
+          keys,
+          style: TextStyle(
+            color: AppTheme.accent,
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'monospace',
+          ),
+        ),
       ),
     );
   }
