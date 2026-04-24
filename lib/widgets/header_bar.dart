@@ -24,6 +24,7 @@ class HeaderBar extends StatelessWidget {
   final TextStyleController textStyleController;
   final VoidCallback? onZenModeToggle;
   final VoidCallback? onSettingsToggle;
+  final VoidCallback? onSpeechToggle;
 
   const HeaderBar({
     super.key,
@@ -44,6 +45,7 @@ class HeaderBar extends StatelessWidget {
     required this.textStyleController,
     this.onZenModeToggle,
     this.onSettingsToggle,
+    this.onSpeechToggle,
   });
 
   @override
@@ -115,6 +117,13 @@ class HeaderBar extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                IconButton(
+                  icon: const Icon(Icons.timer_outlined, size: 20),
+                  onPressed: onSpeechToggle ?? () {},
+                  splashRadius: 20,
+                  tooltip: 'Planejador de Palestra',
+                ),
+                const SizedBox(width: 4),
                 IconButton(
                   icon: const Icon(Icons.settings_outlined, size: 20),
                   onPressed: onSettingsToggle ?? () {},

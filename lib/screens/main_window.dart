@@ -9,6 +9,7 @@ import '../models/note_metadata.dart';
 import '../controllers/text_style_controller.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
+import '../controllers/speech_controller.dart';
 
 class MainWindow extends StatefulWidget {
   const MainWindow({super.key});
@@ -43,6 +44,7 @@ class _MainWindowState extends State<MainWindow> {
   String _statusMessage = 'Pronto';
   String _encoding = 'UTF-8';
   final _textStyleController = TextStyleController();
+  final _speechController = SpeechController();
 
   void _updatePosition(int line, int column) {
     setState(() {
@@ -99,8 +101,19 @@ class _MainWindowState extends State<MainWindow> {
         newName = 'Untitled-$counter';
       }
       _openTabs.add(newName);
-      _tabFormats[newName] = EditFormat.markdown; // Default for new files
+      _tabFormats[newName] = EditFormat.markdown;
       _activeTabIndex = _openTabs.length - 1;
+    });
+  }
+
+  void _toggleSpeechPanel() {
+    setState(() {
+      if (_showRightPanel && _rightPanelType == 'speech') {
+        _showRightPanel = false;
+      } else {
+        _showRightPanel = true;
+        _rightPanelType = 'speech';
+      }
     });
   }
 
@@ -366,6 +379,7 @@ class _MainWindowState extends State<MainWindow> {
               textStyleController: _textStyleController,
               onZenModeToggle: () => setState(() => _isZenMode = !_isZenMode),
               onSettingsToggle: _showSettingsDialog,
+              onSpeechToggle: _toggleSpeechPanel,
             ),
             const Divider(height: 1),
           ],
@@ -434,7 +448,9 @@ class _MainWindowState extends State<MainWindow> {
                       _fileContents[path] = content;
                     },
                     onPositionChanged: _updatePosition,
+                    onSectionsChanged: (sections) => _speechController.updateSections(sections),
                     textStyleController: _textStyleController,
+                    speechController: _speechController,
                   ),
                 ),
                 if (_showRightPanel) ...[
@@ -500,18 +516,225 @@ class _MainWindowState extends State<MainWindow> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: Center(
-              child: Text(
-                _rightPanelType == 'search'
-                    ? 'Search panel...'
-                    : 'Terminal ready...',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-              ),
-            ),
+            child: _rightPanelType == 'speech' 
+                ? _buildSpeechPanel() 
+                : Center(
+                    child: Text(
+                      _rightPanelType == 'search'
+                          ? 'Search panel...'
+                          : 'Terminal ready...',
+                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                    ),
+                  ),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildSpeechPanel() {
+    return ListenableBuilder(
+      listenable: _speechController,
+      builder: (context, _) {
+        final totalElapsed = _speechController.totalElapsed;
+        
+        return Column(
+          children: [
+            // Total Speech Target Input
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  const Icon(Icons.flag_outlined, size: 18),
+                  const SizedBox(width: 8),
+                  const Text('Duração Total:', style: TextStyle(fontSize: 12)),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 60,
+                    child: TextField(
+                      style: const TextStyle(fontSize: 12),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        hintText: 'mm:ss',
+                      ),
+                      onSubmitted: (val) {
+                        final parts = val.split(':');
+                        if (parts.length == 2) {
+                          final mins = int.tryParse(parts[0]) ?? 0;
+                          final secs = int.tryParse(parts[1]) ?? 0;
+                          _speechController.setTotalSpeechTarget(
+                            Duration(minutes: mins, seconds: secs)
+                          );
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            // Timer Display
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              child: Column(
+                children: [
+                  Text(
+                    _formatDuration(totalElapsed),
+                    style: TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.bold,
+                      fontFamily: 'monospace',
+                      color: totalElapsed > _speechController.totalSpeechTarget && _speechController.totalSpeechTarget != Duration.zero
+                        ? Colors.red 
+                        : AppTheme.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    'Restante: ${_formatDuration(_speechController.totalSpeechTarget - totalElapsed)}',
+                    style: TextStyle(
+                      color: (totalElapsed > _speechController.totalSpeechTarget) ? Colors.red : AppTheme.textSecondary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            // Controls
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.skip_previous),
+                  onPressed: _speechController.previousSection,
+                  tooltip: 'Seção Anterior',
+                ),
+                IconButton(
+                  icon: Icon(_speechController.isRunning ? Icons.pause : Icons.play_arrow),
+                  iconSize: 40,
+                  onPressed: _speechController.isRunning 
+                    ? _speechController.pauseTimer 
+                    : _speechController.startTimer,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.skip_next),
+                  onPressed: _speechController.nextSection,
+                  tooltip: 'Próxima Seção',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: _speechController.resetTimer,
+                  tooltip: 'Zerar Cronômetro',
+                ),
+              ],
+            ),
+            
+            const Divider(),
+            
+            // Sections List
+            Expanded(
+              child: ListView.builder(
+                itemCount: _speechController.sections.length,
+                itemBuilder: (context, index) {
+                  final section = _speechController.sections[index];
+                  final isCurrent = _speechController.currentSectionIndex == index;
+                  final isFinished = index < _speechController.currentSectionIndex;
+                  
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: isCurrent ? AppTheme.accent.withValues(alpha: 0.1) : null,
+                      border: Border(bottom: BorderSide(color: Colors.grey.withValues(alpha: 0.1))),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                section.title,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                  color: isCurrent ? AppTheme.accent : (isFinished ? AppTheme.textSecondary : AppTheme.textPrimary),
+                                  decoration: isFinished ? TextDecoration.lineThrough : null,
+                                ),
+                              ),
+                            ),
+                            if (isCurrent)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.accent,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text('AO VIVO', style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            const Text('Meta: ', style: TextStyle(fontSize: 11)),
+                            SizedBox(
+                              width: 50,
+                              child: TextField(
+                                style: const TextStyle(fontSize: 11),
+                                decoration: const InputDecoration(isDense: true, border: InputBorder.none, hintText: '00:00'),
+                                onSubmitted: (val) {
+                                  final parts = val.split(':');
+                                  if (parts.length == 2) {
+                                    final mins = int.tryParse(parts[0]) ?? 0;
+                                    final secs = int.tryParse(parts[1]) ?? 0;
+                                    _speechController.updateTargetDuration(index, Duration(minutes: mins, seconds: secs));
+                                  }
+                                },
+                              ),
+                            ),
+                            if (section.adjustedTargetDuration != section.targetDuration) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                '(${_formatDuration(section.adjustedTargetDuration)})',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: section.adjustedTargetDuration < section.targetDuration ? Colors.red : Colors.green,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                            const Spacer(),
+                            Text(
+                              _formatDuration(section.elapsedDuration),
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'monospace',
+                                color: section.elapsedDuration > section.adjustedTargetDuration && section.targetDuration != Duration.zero
+                                    ? Colors.red 
+                                    : (isCurrent ? AppTheme.accent : AppTheme.textSecondary),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _formatDuration(Duration d) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(d.inMinutes.remainder(60));
+    final seconds = twoDigits(d.inSeconds.remainder(60));
+    return '$minutes:$seconds';
   }
 
   void _showFormatSelectionDialog() {

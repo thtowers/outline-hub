@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../controllers/speech_controller.dart';
+import 'package:appflowy_editor/appflowy_editor.dart';
 import 'package:archive/archive.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart' hide Transaction;
 import 'package:path_provider/path_provider.dart';
@@ -34,7 +36,9 @@ class DocumentView extends StatefulWidget {
   final Map<String, NoteMetadata> noteMetadataMap;
   final Function(String, NoteMetadata) onMetadataChanged;
   final void Function(int line, int column)? onPositionChanged;
+  final void Function(List<String> sections)? onSectionsChanged;
   final TextStyleController textStyleController;
+  final SpeechController? speechController;
 
   const DocumentView({
     super.key,
@@ -56,6 +60,8 @@ class DocumentView extends StatefulWidget {
     required this.onMetadataChanged,
     required this.textStyleController,
     this.onPositionChanged,
+    this.onSectionsChanged,
+    this.speechController,
     this.currentFormat,
   });
 
@@ -96,6 +102,15 @@ class _DocumentViewState extends State<DocumentView> {
             final lines = textBefore.split('\n');
             widget.onPositionChanged!(lines.length, lines.last.length + 1);
           }
+        }
+
+        // Section detection for Plain Text
+        if (widget.onSectionsChanged != null) {
+          final sections = _plainTextController.text.split(RegExp(r'\n-+\n|^-+$', multiLine: true));
+          widget.onSectionsChanged!(sections.map((s) {
+            final lines = s.trim().split('\n');
+            return lines.isNotEmpty ? lines.first : 'Seção';
+          }).toList());
         }
       }
     });
@@ -298,6 +313,7 @@ class _DocumentViewState extends State<DocumentView> {
           final currentPath = widget.tabs[widget.activeTabIndex];
           final markdown = documentToMarkdown(_editorState!.document);
           widget.onContentChanged(currentPath, markdown);
+          _updateSectionsMarkdown();
         }
       });
 
@@ -802,10 +818,16 @@ class _DocumentViewState extends State<DocumentView> {
         ...standardCharacterShortcutEvents
             .where((e) => e.character != '\n'),
       ],
-            commandShortcutEvents: [
-              customTabCommand,
-              ...standardCommandShortcutEvents.where((e) => e.key != 'indent'),
-            ],
+      commandShortcutEvents: [
+        customTabCommand,
+        ...standardCommandShortcutEvents.where((e) => e.key != 'indent'),
+      ],
+      blockComponentBuilders: {
+        ...standardBlockComponentBuilderMap,
+        'divider': CustomHorizontalRuleBuilder(
+          onFinishSection: widget.speechController?.nextSection,
+        ),
+      },
     );
   }
 
@@ -1233,5 +1255,123 @@ class _DocumentViewState extends State<DocumentView> {
       widget.onContentChanged(
           widget.tabs[widget.activeTabIndex], newText);
     }
+  }
+  void _updateSectionsMarkdown() {
+    if (_editorState == null || widget.onSectionsChanged == null) return;
+
+    final nodes = _editorState!.document.root.children;
+    List<String> sections = [];
+    String currentTitle = '';
+    
+    for (var node in nodes) {
+      if (node.type == 'divider') {
+        sections.add(currentTitle.trim());
+        currentTitle = '';
+      } else if (currentTitle.isEmpty && (node.type == 'heading' || node.type == 'paragraph')) {
+        final delta = node.attributes['delta'];
+        String text = '';
+        if (delta is Delta) {
+          text = delta.toPlainText().trim();
+        }
+        if (text.isNotEmpty) {
+          currentTitle = text.length > 30 ? '${text.substring(0, 30)}...' : text;
+        }
+      }
+    }
+    // Add last section
+    sections.add(currentTitle.trim());
+    
+    widget.onSectionsChanged!(sections);
+  }
+}
+
+class CustomHorizontalRuleBuilder extends BlockComponentBuilder {
+  final VoidCallback? onFinishSection;
+
+  CustomHorizontalRuleBuilder({this.onFinishSection});
+
+  @override
+  BlockComponentWidget build(BlockComponentContext blockContext) {
+    final standardBuilder = standardBlockComponentBuilderMap['divider']!;
+    final innerWidget = standardBuilder.build(blockContext);
+    
+    return CustomHorizontalRule(
+      key: blockContext.node.key,
+      inner: innerWidget,
+      onFinishSection: onFinishSection,
+    );
+  }
+
+  @override
+  BlockComponentValidate get validate => (node) => node.type == 'divider';
+}
+class CustomHorizontalRule extends StatelessWidget implements BlockComponentWidget {
+  final BlockComponentWidget inner;
+  final VoidCallback? onFinishSection;
+
+  const CustomHorizontalRule({
+    super.key,
+    required this.inner,
+    this.onFinishSection,
+  });
+
+  @override
+  Node get node => inner.node;
+
+  @override
+  bool get showActions => inner.showActions;
+
+  @override
+  BlockComponentActionBuilder? get actionBuilder => inner.actionBuilder;
+
+  @override
+  BlockComponentActionTrailingBuilder? get actionTrailingBuilder => inner.actionTrailingBuilder;
+
+  @override
+  BlockComponentConfiguration get configuration => inner.configuration;
+
+  @override
+  Widget build(BuildContext context) {
+    bool isHovered = false;
+    return StatefulBuilder(
+      builder: (context, setState) {
+        return MouseRegion(
+          onEnter: (_) => setState(() => isHovered = true),
+          onExit: (_) => setState(() => isHovered = false),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              inner,
+              if (isHovered)
+                Positioned(
+                  right: 48,
+                  child: GestureDetector(
+                    onTap: onFinishSection,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.accent,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.timer_outlined,
+                        size: 14,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      }
+    );
   }
 }
