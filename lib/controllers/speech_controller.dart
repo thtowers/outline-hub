@@ -23,6 +23,7 @@ class SpeechController extends ChangeNotifier {
   bool _isRunning = false;
   Timer? _timer;
   int _currentSectionIndex = 0;
+  bool _isSessionFinished = false;
   
   // Stopwatch state
   Duration _totalElapsed = Duration.zero;
@@ -32,6 +33,7 @@ class SpeechController extends ChangeNotifier {
   bool get isRunning => _isRunning;
   Duration get totalElapsed => _totalElapsed;
   int get currentSectionIndex => _currentSectionIndex;
+  bool get isSessionFinished => _isSessionFinished;
 
   void setTotalSpeechTarget(Duration duration) {
     _totalSpeechTarget = duration;
@@ -113,6 +115,7 @@ class SpeechController extends ChangeNotifier {
       section.elapsedDuration = Duration.zero;
     }
     _currentSectionIndex = 0;
+    _isSessionFinished = false;
     _recalculateAdjustedTargets();
     notifyListeners();
   }
@@ -129,6 +132,26 @@ class SpeechController extends ChangeNotifier {
     if (_currentSectionIndex > 0) {
       _currentSectionIndex--;
       _recalculateAdjustedTargets();
+      notifyListeners();
+    }
+  }
+
+  void restartCurrentSection() {
+    if (_currentSectionIndex >= 0 && _currentSectionIndex < _sections.length) {
+      _sections[_currentSectionIndex].elapsedDuration = Duration.zero;
+      notifyListeners();
+    }
+  }
+
+  void finishSession() {
+    pauseTimer();
+    _isSessionFinished = true;
+    notifyListeners();
+  }
+
+  void renameSection(int index, String newTitle) {
+    if (index >= 0 && index < _sections.length) {
+      _sections[index].title = newTitle;
       notifyListeners();
     }
   }

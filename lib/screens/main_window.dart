@@ -10,6 +10,7 @@ import '../controllers/text_style_controller.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import '../controllers/speech_controller.dart';
+import '../widgets/duration_picker_dialog.dart';
 
 class MainWindow extends StatefulWidget {
   const MainWindow({super.key});
@@ -32,7 +33,7 @@ class _MainWindowState extends State<MainWindow> {
   final Map<String, String> _fileContents = {};
   final Map<String, EditFormat> _tabFormats = {};
   final Map<String, NoteMetadata> _noteMetadataMap = {};
-  
+
   // Tab settings
   int _tabWidth = 2;
   bool _autoIndent = true;
@@ -72,7 +73,7 @@ class _MainWindowState extends State<MainWindow> {
       final newTabs = List<String>.from(_openTabs);
       final String removedPath = newTabs.removeAt(index);
       _tabFormats.remove(removedPath);
-      
+
       if (index < _activeTabIndex) {
         _activeTabIndex--;
       } else if (index == _activeTabIndex) {
@@ -142,7 +143,7 @@ class _MainWindowState extends State<MainWindow> {
       debugPrint('DocumentView: Already picking a folder, ignoring request.');
       return;
     }
-    
+
     _isPicking = true;
     debugPrint('DocumentView: Requesting directory path from FilePicker...');
 
@@ -273,7 +274,10 @@ class _MainWindowState extends State<MainWindow> {
       for (var entity in entities) {
         String name = entity.path.split('/').last;
         // Skip heavy or hidden folders
-        if (name == 'node_modules' || name == '.git' || name == '.dart_tool' || name.startsWith('.')) {
+        if (name == 'node_modules' ||
+            name == '.git' ||
+            name == '.dart_tool' ||
+            name.startsWith('.')) {
           continue;
         }
 
@@ -338,144 +342,184 @@ class _MainWindowState extends State<MainWindow> {
         if (_isZenMode && event.logicalKey == LogicalKeyboardKey.escape) {
           setState(() => _isZenMode = false);
         }
-        
+
         // Atalho Alt + D para Divisor
-        if (event is KeyDownEvent && 
-            HardwareKeyboard.instance.isAltPressed && 
+        if (event is KeyDownEvent &&
+            HardwareKeyboard.instance.isAltPressed &&
             event.logicalKey == LogicalKeyboardKey.keyD) {
           _textStyleController.insertDivider();
         }
       },
       child: Scaffold(
-      backgroundColor: AppTheme.background,
-      body: Column(
-        children: [
-          // Top HeaderBar (replaces window title bar on custom desktop builds)
-          // Top HeaderBar (replaces window title bar on custom desktop builds)
-          if (!_isZenMode) ...[
-            HeaderBar(
-              onSearchToggle: () => _toggleRightPanel('search'),
-              onTerminalToggle: () => _toggleRightPanel('terminal'),
-              onNewTab: _handleNewTab,
-              onSave: _handleSaveFile,
-              onOpenFolder: _handleOpenFolder,
-              onOpenFile: _handleOpenFile,
-              tabWidth: _tabWidth,
-              autoIndent: _autoIndent,
-              insertSpaces: _insertSpaces,
-              currentFormat: _openTabs.isNotEmpty
-                  ? _tabFormats[_openTabs[_activeTabIndex]] ?? EditFormat.txt
-                  : EditFormat.txt,
-              onTabWidthChanged: (val) => setState(() => _tabWidth = val),
-              onAutoIndentChanged: (val) => setState(() => _autoIndent = val),
-              onInsertSpacesChanged: (val) => setState(() => _insertSpaces = val),
-              onFormatChanged: (format) {
-                if (_openTabs.isNotEmpty) {
-                  setState(() {
-                    _tabFormats[_openTabs[_activeTabIndex]] = format;
-                  });
-                }
-              },
-              textStyleController: _textStyleController,
-              onZenModeToggle: () => setState(() => _isZenMode = !_isZenMode),
-              onSettingsToggle: _showSettingsDialog,
-              onSpeechToggle: _toggleSpeechPanel,
-            ),
-            const Divider(height: 1),
-          ],
-          // Main Content Area
-          Expanded(
-            child: Row(
-              children: [
-                // Left Sidebar (File Explorer)
-                if (!_isZenMode) ...[
-                  SideBar(
-                    selectedFile: _openTabs.isNotEmpty
-                        ? _openTabs[_activeTabIndex]
-                        : '',
-                    openTabs: _openTabs,
-                    folderName: _openedFolderName,
-                    folderPath: _openedFolderPath,
-                    folderFiles: _folderFiles,
-                    width: _sidebarWidth,
-                    onFileSelected: _openFile,
-                  ),
-                  // Resizable Divider
-                  MouseRegion(
-                    cursor: SystemMouseCursors.resizeLeftRight,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onHorizontalDragUpdate: (details) {
-                        setState(() {
-                          _sidebarWidth += details.delta.dx;
-                          // Constraints
-                          if (_sidebarWidth < 120) _sidebarWidth = 120;
-                          if (_sidebarWidth > 600) _sidebarWidth = 600;
-                        });
-                      },
-                      child: Container(
-                        width: 4,
-                        color: Colors.black.withValues(alpha: 0.1),
+        backgroundColor: AppTheme.background,
+        body: Column(
+          children: [
+            // Top HeaderBar (replaces window title bar on custom desktop builds)
+            // Top HeaderBar (replaces window title bar on custom desktop builds)
+            if (!_isZenMode) ...[
+              HeaderBar(
+                onSearchToggle: () => _toggleRightPanel('search'),
+                onTerminalToggle: () => _toggleRightPanel('terminal'),
+                onNewTab: _handleNewTab,
+                onSave: _handleSaveFile,
+                onOpenFolder: _handleOpenFolder,
+                onOpenFile: _handleOpenFile,
+                tabWidth: _tabWidth,
+                autoIndent: _autoIndent,
+                insertSpaces: _insertSpaces,
+                currentFormat: _openTabs.isNotEmpty
+                    ? _tabFormats[_openTabs[_activeTabIndex]] ?? EditFormat.txt
+                    : EditFormat.txt,
+                onTabWidthChanged: (val) => setState(() => _tabWidth = val),
+                onAutoIndentChanged: (val) => setState(() => _autoIndent = val),
+                onInsertSpacesChanged: (val) =>
+                    setState(() => _insertSpaces = val),
+                onFormatChanged: (format) {
+                  if (_openTabs.isNotEmpty) {
+                    setState(() {
+                      _tabFormats[_openTabs[_activeTabIndex]] = format;
+                    });
+                  }
+                },
+                textStyleController: _textStyleController,
+                onZenModeToggle: () => setState(() => _isZenMode = !_isZenMode),
+                onSettingsToggle: _showSettingsDialog,
+                onSpeechToggle: _toggleSpeechPanel,
+              ),
+              const Divider(height: 1),
+            ],
+            // Main Content Area
+            Expanded(
+              child: Row(
+                children: [
+                  // Left Sidebar (File Explorer)
+                  if (!_isZenMode) ...[
+                    SideBar(
+                      selectedFile: _openTabs.isNotEmpty
+                          ? _openTabs[_activeTabIndex]
+                          : '',
+                      openTabs: _openTabs,
+                      folderName: _openedFolderName,
+                      folderPath: _openedFolderPath,
+                      folderFiles: _folderFiles,
+                      width: _sidebarWidth,
+                      onFileSelected: _openFile,
+                    ),
+                    // Resizable Divider
+                    MouseRegion(
+                      cursor: SystemMouseCursors.resizeLeftRight,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onHorizontalDragUpdate: (details) {
+                          setState(() {
+                            _sidebarWidth += details.delta.dx;
+                            // Constraints
+                            if (_sidebarWidth < 120) _sidebarWidth = 120;
+                            if (_sidebarWidth > 600) _sidebarWidth = 600;
+                          });
+                        },
+                        child: Container(
+                          width: 4,
+                          color: Colors.black.withValues(alpha: 0.1),
+                        ),
                       ),
                     ),
+                    const VerticalDivider(width: 1),
+                  ],
+                  // Center Document View
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        DocumentView(
+                          tabs: _openTabs,
+                          activeTabIndex: _activeTabIndex,
+                          fileContents: _fileContents,
+                          onCloseTab: _closeTab,
+                          onSelectTab: _selectTab,
+                          onReorderTab: _reorderTab,
+                          onNewTab: _handleNewTab,
+                          onOpenFile: _handleOpenFile,
+                          onOpenFolder: _handleOpenFolder,
+                          onSaveFile: _handleSaveFile,
+                          tabWidth: _tabWidth,
+                          autoIndent: _autoIndent,
+                          insertSpaces: _insertSpaces,
+                          noteMetadataMap: _noteMetadataMap,
+                          onMetadataChanged: (path, meta) {
+                            setState(() => _noteMetadataMap[path] = meta);
+                          },
+                          currentFormat: _openTabs.isNotEmpty
+                              ? _tabFormats[_openTabs[_activeTabIndex]]
+                              : null,
+                          onContentChanged: (path, content) {
+                            _fileContents[path] = content;
+                          },
+                          onPositionChanged: _updatePosition,
+                          onSectionsChanged: (sections) =>
+                              _speechController.updateSections(sections),
+                          textStyleController: _textStyleController,
+                          speechController: _speechController,
+                          onShowSpeechSummary: () {
+                            setState(() {
+                              _showRightPanel = true;
+                              _rightPanelType = 'speech';
+                            });
+                          },
+                        ),
+                        if (_isZenMode)
+                          Positioned(
+                            bottom: 24,
+                            right: 24,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                FloatingActionButton.small(
+                                  heroTag: 'speech_toggle',
+                                  onPressed: _toggleSpeechPanel,
+                                  backgroundColor: _showRightPanel &&
+                                          _rightPanelType == 'speech'
+                                      ? AppTheme.accent
+                                      : AppTheme.surface,
+                                  tooltip: 'Cronômetro',
+                                  child: Icon(
+                                    Icons.timer_outlined,
+                                    size: 20,
+                                    color: _showRightPanel &&
+                                            _rightPanelType == 'speech'
+                                        ? Colors.white
+                                        : AppTheme.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                FloatingActionButton.small(
+                                  heroTag: 'exit_zen',
+                                  onPressed: () =>
+                                      setState(() => _isZenMode = false),
+                                  backgroundColor: AppTheme.accent,
+                                  tooltip: 'Sair da Tela Cheia',
+                                  child: const Icon(
+                                    Icons.fullscreen_exit,
+                                    size: 20,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                  const VerticalDivider(width: 1),
+                  if (_showRightPanel) ...[
+                    const VerticalDivider(width: 1),
+                    _buildRightPanel(),
+                  ],
                 ],
-                // Center Document View
-                Expanded(
-                  child: DocumentView(
-                    tabs: _openTabs,
-                    activeTabIndex: _activeTabIndex,
-                    fileContents: _fileContents,
-                    onCloseTab: _closeTab,
-                    onSelectTab: _selectTab,
-                    onReorderTab: _reorderTab,
-                    onNewTab: _handleNewTab,
-                    onOpenFile: _handleOpenFile,
-                    onOpenFolder: _handleOpenFolder,
-                    onSaveFile: _handleSaveFile,
-                    tabWidth: _tabWidth,
-                    autoIndent: _autoIndent,
-                    insertSpaces: _insertSpaces,
-                    noteMetadataMap: _noteMetadataMap,
-                    onMetadataChanged: (path, meta) {
-                      setState(() => _noteMetadataMap[path] = meta);
-                    },
-                    currentFormat: _openTabs.isNotEmpty
-                        ? _tabFormats[_openTabs[_activeTabIndex]]
-                        : null,
-                    onContentChanged: (path, content) {
-                      _fileContents[path] = content;
-                    },
-                    onPositionChanged: _updatePosition,
-                    onSectionsChanged: (sections) => _speechController.updateSections(sections),
-                    textStyleController: _textStyleController,
-                    speechController: _speechController,
-                  ),
-                ),
-                if (_showRightPanel) ...[
-                  const VerticalDivider(width: 1),
-                  _buildRightPanel(),
-                ],
-              ],
+              ),
             ),
-          ),
-          // Bottom Status Bar
-          if (!_isZenMode) ...[
-            const Divider(height: 1),
-            _buildStatusBar(),
+            // Bottom Status Bar
+            if (!_isZenMode) ...[const Divider(height: 1), _buildStatusBar()],
           ],
-        ],
-      ),
-      // Floating Exit button for Zen Mode
-      floatingActionButton: _isZenMode 
-        ? FloatingActionButton.small(
-            onPressed: () => setState(() => _isZenMode = false),
-            backgroundColor: AppTheme.accent,
-            tooltip: 'Sair da Tela Cheia',
-            child: const Icon(Icons.fullscreen_exit, size: 20, color: Colors.white),
-          )
-        : null,
+        ),
       ),
     );
   }
@@ -493,7 +537,7 @@ class _MainWindowState extends State<MainWindow> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  _rightPanelType == 'search' ? 'Search' : 'Terminal',
+                  _rightPanelType == 'search' ? 'Pesquisa' : 'Cronômetro',
                   style: TextStyle(
                     color: AppTheme.textPrimary,
                     fontWeight: FontWeight.bold,
@@ -516,14 +560,17 @@ class _MainWindowState extends State<MainWindow> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: _rightPanelType == 'speech' 
-                ? _buildSpeechPanel() 
+            child: _rightPanelType == 'speech'
+                ? _buildSpeechPanel()
                 : Center(
                     child: Text(
                       _rightPanelType == 'search'
                           ? 'Search panel...'
                           : 'Terminal ready...',
-                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                      style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
           ),
@@ -537,196 +584,562 @@ class _MainWindowState extends State<MainWindow> {
       listenable: _speechController,
       builder: (context, _) {
         final totalElapsed = _speechController.totalElapsed;
-        
+        final isOvertime =
+            totalElapsed > _speechController.totalSpeechTarget &&
+            _speechController.totalSpeechTarget != Duration.zero;
+
         return Column(
           children: [
-            // Total Speech Target Input
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                children: [
-                  const Icon(Icons.flag_outlined, size: 18),
-                  const SizedBox(width: 8),
-                  const Text('Duração Total:', style: TextStyle(fontSize: 12)),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 60,
-                    child: TextField(
-                      style: const TextStyle(fontSize: 12),
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        hintText: 'mm:ss',
-                      ),
-                      onSubmitted: (val) {
-                        final parts = val.split(':');
-                        if (parts.length == 2) {
-                          final mins = int.tryParse(parts[0]) ?? 0;
-                          final secs = int.tryParse(parts[1]) ?? 0;
-                          _speechController.setTotalSpeechTarget(
-                            Duration(minutes: mins, seconds: secs)
-                          );
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            // Timer Display
+            // Header / Total Duration
             Container(
-              padding: const EdgeInsets.symmetric(vertical: 20),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    AppTheme.surface,
+                    AppTheme.surface.withValues(alpha: 0.8),
+                  ],
+                ),
+              ),
               child: Column(
                 children: [
-                  Text(
-                    _formatDuration(totalElapsed),
-                    style: TextStyle(
-                      fontSize: 40,
-                      fontWeight: FontWeight.bold,
-                      fontFamily: 'monospace',
-                      color: totalElapsed > _speechController.totalSpeechTarget && _speechController.totalSpeechTarget != Duration.zero
-                        ? Colors.red 
-                        : AppTheme.textPrimary,
-                    ),
-                  ),
-                  Text(
-                    'Restante: ${_formatDuration(_speechController.totalSpeechTarget - totalElapsed)}',
-                    style: TextStyle(
-                      color: (totalElapsed > _speechController.totalSpeechTarget) ? Colors.red : AppTheme.textSecondary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            
-            // Controls
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.skip_previous),
-                  onPressed: _speechController.previousSection,
-                  tooltip: 'Seção Anterior',
-                ),
-                IconButton(
-                  icon: Icon(_speechController.isRunning ? Icons.pause : Icons.play_arrow),
-                  iconSize: 40,
-                  onPressed: _speechController.isRunning 
-                    ? _speechController.pauseTimer 
-                    : _speechController.startTimer,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.skip_next),
-                  onPressed: _speechController.nextSection,
-                  tooltip: 'Próxima Seção',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: _speechController.resetTimer,
-                  tooltip: 'Zerar Cronômetro',
-                ),
-              ],
-            ),
-            
-            const Divider(),
-            
-            // Sections List
-            Expanded(
-              child: ListView.builder(
-                itemCount: _speechController.sections.length,
-                itemBuilder: (context, index) {
-                  final section = _speechController.sections[index];
-                  final isCurrent = _speechController.currentSectionIndex == index;
-                  final isFinished = index < _speechController.currentSectionIndex;
-                  
-                  return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: isCurrent ? AppTheme.accent.withValues(alpha: 0.1) : null,
-                      border: Border(bottom: BorderSide(color: Colors.grey.withValues(alpha: 0.1))),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                section.title,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                  color: isCurrent ? AppTheme.accent : (isFinished ? AppTheme.textSecondary : AppTheme.textPrimary),
-                                  decoration: isFinished ? TextDecoration.lineThrough : null,
-                                ),
-                              ),
-                            ),
-                            if (isCurrent)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: AppTheme.accent,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: const Text('AO VIVO', style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
-                              ),
-                          ],
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'CRONÔMETRO TOTAL',
+                        style: AppTheme.uiStyle.copyWith(
+                          color: AppTheme.textSecondary,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.2,
                         ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            const Text('Meta: ', style: TextStyle(fontSize: 11)),
-                            SizedBox(
-                              width: 50,
-                              child: TextField(
-                                style: const TextStyle(fontSize: 11),
-                                decoration: const InputDecoration(isDense: true, border: InputBorder.none, hintText: '00:00'),
-                                onSubmitted: (val) {
-                                  final parts = val.split(':');
-                                  if (parts.length == 2) {
-                                    final mins = int.tryParse(parts[0]) ?? 0;
-                                    final secs = int.tryParse(parts[1]) ?? 0;
-                                    _speechController.updateTargetDuration(index, Duration(minutes: mins, seconds: secs));
-                                  }
-                                },
-                              ),
+                      ),
+                      GestureDetector(
+                        onTap: () async {
+                          final newDuration = await DurationPickerDialog.show(
+                            context,
+                            initialDuration:
+                                _speechController.totalSpeechTarget,
+                            title: 'Duração Total da Palestra',
+                          );
+                          if (newDuration != null) {
+                            _speechController.setTotalSpeechTarget(newDuration);
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.background,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: AppTheme.border,
+                              width: 0.5,
                             ),
-                            if (section.adjustedTargetDuration != section.targetDuration) ...[
-                              const SizedBox(width: 8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.edit_outlined, size: 10),
+                              const SizedBox(width: 4),
                               Text(
-                                '(${_formatDuration(section.adjustedTargetDuration)})',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: section.adjustedTargetDuration < section.targetDuration ? Colors.red : Colors.green,
-                                  fontWeight: FontWeight.bold,
+                                _formatDuration(
+                                  _speechController.totalSpeechTarget,
+                                ),
+                                style: AppTheme.uiStyle.copyWith(
+                                  fontSize: 10,
+                                  color: AppTheme.textPrimary,
                                 ),
                               ),
                             ],
-                            const Spacer(),
-                            Text(
-                              _formatDuration(section.elapsedDuration),
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                fontFamily: 'monospace',
-                                color: section.elapsedDuration > section.adjustedTargetDuration && section.targetDuration != Duration.zero
-                                    ? Colors.red 
-                                    : (isCurrent ? AppTheme.accent : AppTheme.textSecondary),
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
-                      ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _formatDuration(totalElapsed),
+                    style: AppTheme.uiStyle.copyWith(
+                      fontSize: 48,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: -1.5,
+                      color: isOvertime ? AppTheme.error : AppTheme.textPrimary,
                     ),
-                  );
-                },
+                  ),
+                  if (_speechController.totalSpeechTarget != Duration.zero)
+                    Container(
+                      margin: const EdgeInsets.only(top: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: (isOvertime ? AppTheme.error : AppTheme.accent)
+                            .withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        isOvertime
+                            ? 'ATRAZADO: -${_formatDuration(totalElapsed - _speechController.totalSpeechTarget)}'
+                            : 'SALDO: +${_formatDuration(_speechController.totalSpeechTarget - totalElapsed)}',
+                        style: AppTheme.uiStyle.copyWith(
+                          color: isOvertime ? AppTheme.error : AppTheme.accent,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                ],
               ),
+            ),
+
+            // Main Controls
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildLargeControlButton(
+                    icon: Icons.replay_rounded,
+                    onPressed: _speechController.restartCurrentSection,
+                    color: AppTheme.textSecondary,
+                    isSmall: true,
+                    tooltip: 'Reiniciar Seção',
+                  ),
+                  _buildLargeControlButton(
+                    icon: Icons.skip_previous_rounded,
+                    onPressed: _speechController.previousSection,
+                    color: AppTheme.textPrimary,
+                    tooltip: 'Seção Anterior',
+                  ),
+                  _buildPlayPauseButton(),
+                  _buildLargeControlButton(
+                    icon: Icons.skip_next_rounded,
+                    onPressed: _speechController.nextSection,
+                    color: AppTheme.textPrimary,
+                    tooltip: 'Próxima Seção',
+                  ),
+                  _buildLargeControlButton(
+                    icon: Icons.refresh_rounded,
+                    onPressed: _speechController.resetTimer,
+                    color: AppTheme.textSecondary,
+                    isSmall: true,
+                    tooltip: 'Zerar Tudo',
+                  ),
+                ],
+              ),
+            ),
+
+            // Finalize Button
+            if (!_speechController.isSessionFinished)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _speechController.finishSession,
+                    icon: const Icon(Icons.stop_circle_rounded, size: 20),
+                    label: const Text('FINALIZAR'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.error.withValues(alpha: 0.1),
+                      foregroundColor: AppTheme.error,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(
+                          color: AppTheme.error.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
+              ),
+
+            const SizedBox(height: 8),
+            const Divider(height: 1),
+
+            // Sections List or Summary Report
+            Expanded(
+              child: _speechController.isSessionFinished
+                  ? _buildSpeechSummary()
+                  : CallbackShortcuts(
+                      bindings: {
+                        const SingleActivator(LogicalKeyboardKey.f2): () {
+                          if (!_speechController.isSessionFinished) {
+                            final index = _speechController.currentSectionIndex;
+                            _showRenameDialog(
+                              index,
+                              _speechController.sections[index].title,
+                            );
+                          }
+                        },
+                      },
+                      child: Focus(
+                        autofocus: true,
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _speechController.sections.length,
+                          itemBuilder: (context, index) {
+                            final section = _speechController.sections[index];
+                            final isCurrent =
+                                _speechController.currentSectionIndex == index;
+                            final isFinished =
+                                index < _speechController.currentSectionIndex;
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              decoration: BoxDecoration(
+                                color: isCurrent
+                                    ? AppTheme.accent.withValues(alpha: 0.05)
+                                    : AppTheme.surface.withValues(alpha: 0.5),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: isCurrent
+                                      ? AppTheme.accent.withValues(alpha: 0.3)
+                                      : Colors.transparent,
+                                  width: 1,
+                                ),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Container(
+                                          width: 24,
+                                          height: 24,
+                                          decoration: BoxDecoration(
+                                            color: isFinished
+                                                ? AppTheme.accent
+                                                : (isCurrent
+                                                      ? AppTheme.accent
+                                                      : AppTheme.background),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: Center(
+                                            child: isFinished
+                                                ? const Icon(
+                                                    Icons.check,
+                                                    size: 14,
+                                                    color: Colors.white,
+                                                  )
+                                                : Text(
+                                                    '${index + 1}',
+                                                    style: AppTheme.uiStyle
+                                                        .copyWith(
+                                                          fontSize: 11,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          color: isCurrent
+                                                              ? Colors.white
+                                                              : AppTheme
+                                                                    .textSecondary,
+                                                        ),
+                                                  ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: InkWell(
+                                            onTap: () => _showRenameDialog(
+                                              index,
+                                              section.title,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              4,
+                                            ),
+                                            child: Padding(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 4,
+                                                    vertical: 2,
+                                                  ),
+                                              child: Text(
+                                                section.title,
+                                                style: AppTheme.uiStyle
+                                                    .copyWith(
+                                                      fontWeight: isCurrent
+                                                          ? FontWeight.bold
+                                                          : FontWeight.w500,
+                                                      fontSize: 14,
+                                                      color: isFinished
+                                                          ? AppTheme
+                                                                .textSecondary
+                                                          : AppTheme
+                                                                .textPrimary,
+                                                      decoration: isFinished
+                                                          ? TextDecoration
+                                                                .lineThrough
+                                                          : null,
+                                                    ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.end,
+                                          children: [
+                                            if (isFinished || isCurrent)
+                                              _buildDifferenceBadge(
+                                                section.adjustedTargetDuration -
+                                                    section.elapsedDuration,
+                                              ),
+                                            if (isCurrent) ...[
+                                              const SizedBox(height: 4),
+                                              _buildLiveIndicator(),
+                                            ],
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Material(
+                                            color: Colors.transparent,
+                                            child: InkWell(
+                                              onTap: () async {
+                                                final newDuration =
+                                                    await DurationPickerDialog.show(
+                                                      context,
+                                                      initialDuration: section
+                                                          .targetDuration,
+                                                      title: 'Meta da Seção',
+                                                    );
+                                                if (newDuration != null) {
+                                                  _speechController
+                                                      .updateTargetDuration(
+                                                        index,
+                                                        newDuration,
+                                                      );
+                                                }
+                                              },
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              child: Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 4,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: AppTheme.background
+                                                      .withValues(alpha: 0.5),
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                  border: Border.all(
+                                                    color: AppTheme.border
+                                                        .withValues(alpha: 0.5),
+                                                  ),
+                                                ),
+                                                child: FittedBox(
+                                                  fit: BoxFit.scaleDown,
+                                                  alignment:
+                                                      Alignment.centerLeft,
+                                                  child: Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      const Icon(
+                                                        Icons
+                                                            .edit_calendar_rounded,
+                                                        size: 14,
+                                                        color: AppTheme.accent,
+                                                      ),
+                                                      const SizedBox(width: 4),
+                                                      Text(
+                                                        'Meta: ${_formatDuration(section.targetDuration)}',
+                                                        style: AppTheme.uiStyle
+                                                            .copyWith(
+                                                              fontSize: 11,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                              color: AppTheme
+                                                                  .textPrimary,
+                                                            ),
+                                                      ),
+                                                      if (section
+                                                              .adjustedTargetDuration !=
+                                                          section
+                                                              .targetDuration) ...[
+                                                        const SizedBox(
+                                                          width: 2,
+                                                        ),
+                                                        Text(
+                                                          '→${_formatDuration(section.adjustedTargetDuration)}',
+                                                          style: AppTheme
+                                                              .uiStyle
+                                                              .copyWith(
+                                                                fontSize: 11,
+                                                                color:
+                                                                    section.adjustedTargetDuration <
+                                                                        section
+                                                                            .targetDuration
+                                                                    ? AppTheme
+                                                                          .error
+                                                                    : AppTheme
+                                                                          .accent,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                              ),
+                                                        ),
+                                                      ],
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          _formatDuration(
+                                            section.elapsedDuration,
+                                          ),
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                            fontFamily: 'monospace',
+                                            color:
+                                                section.elapsedDuration >
+                                                        section
+                                                            .adjustedTargetDuration &&
+                                                    section.targetDuration !=
+                                                        Duration.zero
+                                                ? AppTheme.error
+                                                : (isCurrent
+                                                      ? AppTheme.accent
+                                                      : AppTheme.textSecondary),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
             ),
           ],
         );
       },
+    );
+  }
+
+  Widget _buildDifferenceBadge(Duration difference) {
+    final isPositive = difference >= Duration.zero;
+    final absDiff = difference.abs();
+    final color = isPositive ? AppTheme.accent : AppTheme.error;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        '${isPositive ? '+' : '-'}${_formatDuration(absDiff)}',
+        style: AppTheme.uiStyle.copyWith(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLiveIndicator() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.error,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        'AGORA',
+        style: AppTheme.uiStyle.copyWith(
+          color: Colors.white,
+          fontSize: 9,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLargeControlButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    required Color color,
+    bool isSmall = false,
+    String? tooltip,
+  }) {
+    return Tooltip(
+      message: tooltip ?? '',
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(30),
+        child: Container(
+          padding: EdgeInsets.all(isSmall ? 6 : 8),
+          decoration: BoxDecoration(
+            color: AppTheme.surface,
+            shape: BoxShape.circle,
+            border: Border.all(color: AppTheme.border, width: 1),
+          ),
+          child: Icon(icon, size: isSmall ? 18 : 22, color: color),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlayPauseButton() {
+    final isRunning = _speechController.isRunning;
+    return InkWell(
+      onTap: isRunning
+          ? _speechController.pauseTimer
+          : _speechController.startTimer,
+      borderRadius: BorderRadius.circular(40),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.accent,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.accent.withValues(alpha: 0.4),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Icon(
+          isRunning ? Icons.pause_rounded : Icons.play_arrow_rounded,
+          size: 28,
+          color: Colors.white,
+        ),
+      ),
     );
   }
 
@@ -787,9 +1200,13 @@ class _MainWindowState extends State<MainWindow> {
           Row(
             children: [
               Icon(
-                _statusMessage == 'Pronto' ? Icons.check_circle_outline : Icons.sync,
+                _statusMessage == 'Pronto'
+                    ? Icons.check_circle_outline
+                    : Icons.sync,
                 size: 14,
-                color: _statusMessage == 'Pronto' ? Colors.green : AppTheme.accent,
+                color: _statusMessage == 'Pronto'
+                    ? Colors.green
+                    : AppTheme.accent,
               ),
               const SizedBox(width: 8),
               Text(
@@ -812,7 +1229,7 @@ class _MainWindowState extends State<MainWindow> {
                 child: Text(
                   _openTabs.isNotEmpty
                       ? (_tabFormats[_openTabs[_activeTabIndex]]?.label ??
-                          'Texto Simples')
+                            'Texto Simples')
                       : 'Texto Simples',
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
                 ),
@@ -918,22 +1335,37 @@ class _MainWindowState extends State<MainWindow> {
   Widget _buildSettingItem(String title, String value, IconData icon) {
     return ListTile(
       leading: Icon(icon, color: AppTheme.textSecondary, size: 20),
-      title: Text(title, style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
-      subtitle: Text(value, style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-      trailing: Icon(Icons.chevron_right, color: AppTheme.textSecondary, size: 16),
+      title: Text(
+        title,
+        style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+      ),
+      subtitle: Text(
+        value,
+        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+      ),
+      trailing: Icon(
+        Icons.chevron_right,
+        color: AppTheme.textSecondary,
+        size: 16,
+      ),
     );
   }
 
   Widget _buildShortcutItem(String title, String keys, IconData icon) {
     return ListTile(
       leading: Icon(icon, color: AppTheme.textSecondary, size: 20),
-      title: Text(title, style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+      title: Text(
+        title,
+        style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+      ),
       trailing: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
           color: AppTheme.background,
           borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: AppTheme.textSecondary.withValues(alpha: 0.2)),
+          border: Border.all(
+            color: AppTheme.textSecondary.withValues(alpha: 0.2),
+          ),
         ),
         child: Text(
           keys,
@@ -946,6 +1378,241 @@ class _MainWindowState extends State<MainWindow> {
         ),
       ),
     );
+  }
+
+  Widget _buildSpeechSummary() {
+    final sections = _speechController.sections;
+    final totalElapsed = _speechController.totalElapsed;
+    final totalTarget = _speechController.totalSpeechTarget;
+    final diff = totalTarget - totalElapsed;
+    final isFast = diff >= Duration.zero;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        // Report Header
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppTheme.border.withValues(alpha: 0.5)),
+          ),
+          child: Column(
+            children: [
+              Icon(
+                isFast ? Icons.emoji_events_rounded : Icons.timer_outlined,
+                size: 48,
+                color: isFast ? Colors.amber : AppTheme.error,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Resumo da Palestra',
+                style: AppTheme.uiStyle.copyWith(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                isFast
+                    ? 'Parabéns! Você terminou com ${_formatDuration(diff)} de sobra!'
+                    : 'Atenção! Você excedeu o tempo total em ${_formatDuration(diff.abs())}.',
+                textAlign: TextAlign.center,
+                style: AppTheme.uiStyle.copyWith(
+                  color: isFast ? AppTheme.accent : AppTheme.error,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 24),
+
+        Text(
+          'DESEMPENHO POR SEÇÃO',
+          style: AppTheme.uiStyle.copyWith(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            color: AppTheme.textSecondary,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        ...List.generate(sections.length, (index) {
+          final s = sections[index];
+          final sDiff = s.adjustedTargetDuration - s.elapsedDuration;
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.surface.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 12,
+                  backgroundColor: AppTheme.background,
+                  child: Text(
+                    '${index + 1}',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        s.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        'Meta: ${_formatDuration(s.targetDuration)} | Real: ${_formatDuration(s.elapsedDuration)}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _buildDifferenceBadge(sDiff),
+              ],
+            ),
+          );
+        }),
+
+        const SizedBox(height: 24),
+
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _speechController.resetTimer,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('INICIAR NOVA REPETIÇÃO'),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              side: BorderSide(color: AppTheme.accent.withValues(alpha: 0.5)),
+              foregroundColor: AppTheme.accent,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _exportSummaryToMarkdown,
+            icon: const Icon(Icons.download_rounded),
+            label: const Text('SALVAR RESUMO (.MD)'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.accent,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 0,
+            ),
+          ),
+        ),
+        const SizedBox(height: 40),
+      ],
+    );
+  }
+
+  String _generateSummaryMarkdown() {
+    final sections = _speechController.sections;
+    final totalElapsed = _speechController.totalElapsed;
+    final totalTarget = _speechController.totalSpeechTarget;
+    final diff = totalTarget - totalElapsed;
+    final isFast = diff >= Duration.zero;
+
+    StringBuffer sb = StringBuffer();
+    sb.writeln('# Resumo da Palestra');
+    sb.writeln('**Data:** ${DateTime.now().toString().split('.').first}');
+    sb.writeln();
+    sb.writeln('## Resultado Geral');
+    sb.writeln(
+      '* **Status:** ${isFast ? "✅ Dentro do Tempo" : "⚠️ Excedeu o Tempo"}',
+    );
+    sb.writeln('* **Tempo Total Planejado:** ${_formatDuration(totalTarget)}');
+    sb.writeln('* **Tempo Total Realizado:** ${_formatDuration(totalElapsed)}');
+    sb.writeln(
+      '* **Saldo:** ${isFast ? "+" : "-"}${_formatDuration(diff.abs())}',
+    );
+    sb.writeln();
+    sb.writeln('## Detalhamento por Seção');
+    sb.writeln('| # | Seção | Planejado | Realizado | Diferença |');
+    sb.writeln('|---|-------|-----------|-----------|-----------|');
+
+    for (int i = 0; i < sections.length; i++) {
+      final s = sections[i];
+      final sDiff = s.adjustedTargetDuration - s.elapsedDuration;
+      final sIsFast = sDiff >= Duration.zero;
+      sb.writeln(
+        '| ${i + 1} | ${s.title} | ${_formatDuration(s.targetDuration)} | ${_formatDuration(s.elapsedDuration)} | ${sIsFast ? "+" : "-"}${_formatDuration(sDiff.abs())} |',
+      );
+    }
+
+    return sb.toString();
+  }
+
+  Future<void> _exportSummaryToMarkdown() async {
+    final content = _generateSummaryMarkdown();
+    final timestamp = DateTime.now()
+        .toString()
+        .replaceAll(':', '-')
+        .split('.')
+        .first;
+    final fileName = 'Resumo_Palestra_$timestamp.md';
+
+    try {
+      String? outputFile = await FilePicker.platform.saveFile(
+        dialogTitle: 'Salvar Resumo da Palestra',
+        fileName: fileName,
+        type: FileType.any,
+      );
+
+      if (outputFile != null) {
+        String finalPath = outputFile;
+        if (!finalPath.endsWith('.md')) {
+          finalPath += '.md';
+        }
+
+        final file = File(finalPath);
+        await file.writeAsString(content);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Resumo exportado com sucesso: $finalPath')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao salvar resumo: $e')));
+      }
+    }
   }
 
   void _showEncodingSelectionDialog() {
@@ -962,6 +1629,42 @@ class _MainWindowState extends State<MainWindow> {
             child: Text(enc),
           );
         }).toList(),
+      ),
+    );
+  }
+
+  void _showRenameDialog(int index, String currentTitle) {
+    final controller = TextEditingController(text: currentTitle);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Renomear Seção'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Nome da seção'),
+          onSubmitted: (value) {
+            if (value.isNotEmpty) {
+              _speechController.renameSection(index, value);
+              Navigator.pop(context);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('CANCELAR'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (controller.text.isNotEmpty) {
+                _speechController.renameSection(index, controller.text);
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('SALVAR'),
+          ),
+        ],
       ),
     );
   }

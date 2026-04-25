@@ -105,7 +105,9 @@ class HeaderBar extends StatelessWidget {
                       const VerticalDivider(width: 1),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: TextStyleToolbar(controller: textStyleController),
+                        child: TextStyleToolbar(
+                          controller: textStyleController,
+                        ),
                       ),
                     ],
                   ),
@@ -121,14 +123,14 @@ class HeaderBar extends StatelessWidget {
                   icon: const Icon(Icons.timer_outlined, size: 20),
                   onPressed: onSpeechToggle ?? () {},
                   splashRadius: 20,
-                  tooltip: 'Planejador de Palestra',
+                  tooltip: 'Cronômetror',
                 ),
                 const SizedBox(width: 4),
                 IconButton(
                   icon: const Icon(Icons.settings_outlined, size: 20),
                   onPressed: onSettingsToggle ?? () {},
                   splashRadius: 20,
-                  tooltip: 'Configurações do Editor',
+                  tooltip: 'Configurações',
                 ),
                 const SizedBox(width: 4),
                 IconButton(

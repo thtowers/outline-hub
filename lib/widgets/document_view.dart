@@ -15,7 +15,7 @@ import 'dart:io';
 import '../models/edit_format.dart';
 import '../models/note_metadata.dart';
 import '../controllers/text_style_controller.dart';
-import 'package:appflowy_editor/appflowy_editor.dart';
+import 'duration_picker_dialog.dart';
 
 class DocumentView extends StatefulWidget {
   final List<String> tabs;
@@ -39,6 +39,7 @@ class DocumentView extends StatefulWidget {
   final void Function(List<String> sections)? onSectionsChanged;
   final TextStyleController textStyleController;
   final SpeechController? speechController;
+  final VoidCallback? onShowSpeechSummary;
 
   const DocumentView({
     super.key,
@@ -62,6 +63,7 @@ class DocumentView extends StatefulWidget {
     this.onPositionChanged,
     this.onSectionsChanged,
     this.speechController,
+    this.onShowSpeechSummary,
     this.currentFormat,
   });
 
@@ -90,15 +92,19 @@ class _DocumentViewState extends State<DocumentView> {
     super.initState();
     _plainTextController = TextEditingController();
     _plainTextController.addListener(() {
-      if (widget.tabs.isNotEmpty && widget.activeTabIndex < widget.tabs.length) {
+      if (widget.tabs.isNotEmpty &&
+          widget.activeTabIndex < widget.tabs.length) {
         final path = widget.tabs[widget.activeTabIndex];
         widget.onContentChanged(path, _plainTextController.text);
-        
+
         // Update Line and Column
         if (widget.onPositionChanged != null) {
           final selection = _plainTextController.selection;
           if (selection.isValid) {
-            final textBefore = _plainTextController.text.substring(0, selection.baseOffset);
+            final textBefore = _plainTextController.text.substring(
+              0,
+              selection.baseOffset,
+            );
             final lines = textBefore.split('\n');
             widget.onPositionChanged!(lines.length, lines.last.length + 1);
           }
@@ -106,11 +112,15 @@ class _DocumentViewState extends State<DocumentView> {
 
         // Section detection for Plain Text
         if (widget.onSectionsChanged != null) {
-          final sections = _plainTextController.text.split(RegExp(r'\n-+\n|^-+$', multiLine: true));
-          widget.onSectionsChanged!(sections.map((s) {
-            final lines = s.trim().split('\n');
-            return lines.isNotEmpty ? lines.first : 'Seção';
-          }).toList());
+          final sections = _plainTextController.text.split(
+            RegExp(r'\n-+\n|^-+$', multiLine: true),
+          );
+          widget.onSectionsChanged!(
+            sections.map((s) {
+              final lines = s.trim().split('\n');
+              return lines.isNotEmpty ? lines.first : 'Seção';
+            }).toList(),
+          );
         }
       }
     });
@@ -121,7 +131,6 @@ class _DocumentViewState extends State<DocumentView> {
     _setupStyleController();
     widget.textStyleController.addListener(_onStyleChanged);
   }
-
 
   void _setupStyleController() {
     debugPrint('DocumentView: Setting up Style Controller callbacks');
@@ -170,10 +179,7 @@ class _DocumentViewState extends State<DocumentView> {
             _isApplyingStyle = false;
           });
 
-          _editorState!.formatDelta(
-            selection,
-            {'font_size': size.toDouble()},
-          );
+          _editorState!.formatDelta(selection, {'font_size': size.toDouble()});
         }
       } else {
         setState(() {});
@@ -187,35 +193,39 @@ class _DocumentViewState extends State<DocumentView> {
           final transaction = _editorState!.transaction;
           final path = selection.end.path;
           final nextPath = path.next;
-          
+
           // Inserimos o divisor e o parágrafo em sequência
-          transaction.insertNodes(
-            nextPath,
-            [
-              Node(type: 'divider', attributes: {}),
-              Node(type: 'paragraph', attributes: {'delta': []}),
-            ],
-          );
-          
+          transaction.insertNodes(nextPath, [
+            Node(type: 'divider', attributes: {}),
+            Node(type: 'paragraph', attributes: {'delta': []}),
+          ]);
+
           // Move o cursor para o início do novo parágrafo (que agora está em nextPath + 1)
           final newParagraphPath = nextPath.next;
           transaction.afterSelection = Selection.collapsed(
             Position(path: newParagraphPath, offset: 0),
           );
-          
+
           _editorState!.apply(transaction);
         }
       } else {
         // Implementação para Texto Simples (Plain Text)
         final text = _plainTextController.text;
         final selection = _plainTextController.selection;
-        const divider = '\n--------------------------------------------------\n';
-        
+        const divider =
+            '\n--------------------------------------------------\n';
+
         if (selection.isValid) {
-          final newText = text.replaceRange(selection.start, selection.end, divider);
+          final newText = text.replaceRange(
+            selection.start,
+            selection.end,
+            divider,
+          );
           _plainTextController.value = TextEditingValue(
             text: newText,
-            selection: TextSelection.collapsed(offset: selection.start + divider.length),
+            selection: TextSelection.collapsed(
+              offset: selection.start + divider.length,
+            ),
           );
         } else {
           _plainTextController.text += divider;
@@ -231,9 +241,12 @@ class _DocumentViewState extends State<DocumentView> {
   bool get _isMarkdown {
     if (widget.tabs.isEmpty) return false;
     final path = widget.tabs[widget.activeTabIndex];
-    final isMd = path.toLowerCase().endsWith('.md') ||
+    final isMd =
+        path.toLowerCase().endsWith('.md') ||
         widget.currentFormat == EditFormat.markdown;
-    debugPrint('DocumentView: _isMarkdown for $path = $isMd (format: ${widget.currentFormat})');
+    debugPrint(
+      'DocumentView: _isMarkdown for $path = $isMd (format: ${widget.currentFormat})',
+    );
     return isMd;
   }
 
@@ -241,7 +254,8 @@ class _DocumentViewState extends State<DocumentView> {
     if (widget.tabs.isEmpty) return '';
     final path = widget.tabs[widget.activeTabIndex];
 
-    if (widget.fileContents.containsKey(path)) return widget.fileContents[path]!;
+    if (widget.fileContents.containsKey(path))
+      return widget.fileContents[path]!;
 
     try {
       if (path.toLowerCase().endsWith('.jwpub') ||
@@ -259,7 +273,9 @@ class _DocumentViewState extends State<DocumentView> {
 
   void _loadCurrentTab() {
     final content = _getContentForCurrentTab();
-    debugPrint('DocumentView: Loading tab. isMarkdown=$_isMarkdown, content length=${content.length}');
+    debugPrint(
+      'DocumentView: Loading tab. isMarkdown=$_isMarkdown, content length=${content.length}',
+    );
     if (_isMarkdown) {
       _loadMarkdownEditor(content);
     } else {
@@ -271,13 +287,16 @@ class _DocumentViewState extends State<DocumentView> {
   }
 
   void _loadMarkdownEditor(String markdownContent) {
-    final path =
-        widget.tabs.isNotEmpty ? widget.tabs[widget.activeTabIndex] : '';
-    
+    final path = widget.tabs.isNotEmpty
+        ? widget.tabs[widget.activeTabIndex]
+        : '';
+
     debugPrint('DocumentView: Loading Markdown editor for path: $path');
-    
+
     if (_lastLoadedMarkdownPath == path && _editorState != null) {
-      debugPrint('DocumentView: Editor already loaded for this path, skipping.');
+      debugPrint(
+        'DocumentView: Editor already loaded for this path, skipping.',
+      );
       return;
     }
 
@@ -294,7 +313,7 @@ class _DocumentViewState extends State<DocumentView> {
       } else {
         document = markdownToDocument(markdownContent);
       }
-      
+
       setState(() {
         _editorState = EditorState(document: document);
         debugPrint('DocumentView: EditorState initialized.');
@@ -335,14 +354,15 @@ class _DocumentViewState extends State<DocumentView> {
         }
 
         // 2. Detect Styles in Selection (Detectando Atributos Inline)
-        if (_isApplyingStyle) return; // Ignora se estivermos aplicando um estilo manualmente
-        
+        if (_isApplyingStyle)
+          return; // Ignora se estivermos aplicando um estilo manualmente
+
         final styles = _editorState!.getDeltaAttributesInSelectionStart() ?? {};
-        
+
         // Font Size detection (Chave oficial: font_size)
         final fontSizeVal = styles['font_size'] ?? styles['fontSize'];
         double fontSize = 16.0; // Sincronizado com o padrão do editor
-        
+
         if (fontSizeVal is num) {
           fontSize = fontSizeVal.toDouble();
         } else if (fontSizeVal is String) {
@@ -370,11 +390,15 @@ class _DocumentViewState extends State<DocumentView> {
 
         final isBold = styles['bold'] == true;
         final isItalic = styles['italic'] == true;
-        
+
         // Sincroniza a barra superior
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
-            widget.textStyleController.updateFromSelection(fontSize, isBold, isItalic);
+            widget.textStyleController.updateFromSelection(
+              fontSize,
+              isBold,
+              isItalic,
+            );
           }
         });
       });
@@ -399,20 +423,24 @@ class _DocumentViewState extends State<DocumentView> {
       widget.textStyleController.addListener(_onStyleChanged);
     }
 
-    final oldPath = oldWidget.tabs.isNotEmpty &&
+    final oldPath =
+        oldWidget.tabs.isNotEmpty &&
             oldWidget.activeTabIndex < oldWidget.tabs.length
         ? oldWidget.tabs[oldWidget.activeTabIndex]
         : null;
-    final newPath = widget.tabs.isNotEmpty &&
-            widget.activeTabIndex < widget.tabs.length
+    final newPath =
+        widget.tabs.isNotEmpty && widget.activeTabIndex < widget.tabs.length
         ? widget.tabs[widget.activeTabIndex]
         : null;
 
-    final tabChanged = oldPath != newPath ||
+    final tabChanged =
+        oldPath != newPath ||
         oldWidget.tabs.length != widget.tabs.length ||
         oldWidget.currentFormat != widget.currentFormat;
 
-    debugPrint('DocumentView: didUpdateWidget. tabChanged=$tabChanged (oldPath=$oldPath, newPath=$newPath, oldFormat=${oldWidget.currentFormat}, newFormat=${widget.currentFormat})');
+    debugPrint(
+      'DocumentView: didUpdateWidget. tabChanged=$tabChanged (oldPath=$oldPath, newPath=$newPath, oldFormat=${oldWidget.currentFormat}, newFormat=${widget.currentFormat})',
+    );
 
     if (tabChanged) {
       _editorSubscription?.cancel();
@@ -421,8 +449,8 @@ class _DocumentViewState extends State<DocumentView> {
       _lastLoadedMarkdownPath = null;
       _loadCurrentTab();
       // Update header controllers for new tab
-      final newPath = widget.tabs.isNotEmpty &&
-              widget.activeTabIndex < widget.tabs.length
+      final newPath =
+          widget.tabs.isNotEmpty && widget.activeTabIndex < widget.tabs.length
           ? widget.tabs[widget.activeTabIndex]
           : null;
       if (newPath != null) {
@@ -474,14 +502,19 @@ class _DocumentViewState extends State<DocumentView> {
         }
         if (snapshot.hasError) {
           return Center(
-              child: Text('Error loading DOCX: ${snapshot.error}',
-                  style: const TextStyle(color: Colors.red)));
+            child: Text(
+              'Error loading DOCX: ${snapshot.error}',
+              style: const TextStyle(color: Colors.red),
+            ),
+          );
         }
         return Padding(
           padding: const EdgeInsets.all(24.0),
           child: SingleChildScrollView(
-            child: Text(snapshot.data ?? '',
-                style: AppTheme.codeTextStyle.copyWith(fontSize: 14)),
+            child: Text(
+              snapshot.data ?? '',
+              style: AppTheme.codeTextStyle.copyWith(fontSize: 14),
+            ),
           ),
         );
       },
@@ -502,8 +535,10 @@ class _DocumentViewState extends State<DocumentView> {
         }
         if (snapshot.hasError || !snapshot.hasData) {
           return Center(
-            child: Text('Error loading publication: ${snapshot.error}',
-                style: TextStyle(color: Colors.red.shade300)),
+            child: Text(
+              'Error loading publication: ${snapshot.error}',
+              style: TextStyle(color: Colors.red.shade300),
+            ),
           );
         }
         final data = snapshot.data!;
@@ -518,20 +553,29 @@ class _DocumentViewState extends State<DocumentView> {
             Container(
               padding: const EdgeInsets.all(16),
               color: AppTheme.accent.withValues(alpha: 0.05),
-              child: Row(children: [
-                Icon(Icons.library_books, color: AppTheme.accent, size: 20),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(title,
+              child: Row(
+                children: [
+                  Icon(Icons.library_books, color: AppTheme.accent, size: 20),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
                       style: TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14)),
-                ),
-                Text(pub['symbol'] ?? '',
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    pub['symbol'] ?? '',
                     style: TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 12)),
-              ]),
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
             ),
             const Divider(height: 1),
             Expanded(
@@ -546,21 +590,28 @@ class _DocumentViewState extends State<DocumentView> {
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
                       side: BorderSide(
-                          color: AppTheme.textSecondary.withValues(alpha: 0.1)),
+                        color: AppTheme.textSecondary.withValues(alpha: 0.1),
+                      ),
                     ),
                     margin: const EdgeInsets.only(bottom: 16),
                     child: ExpansionTile(
                       initiallyExpanded: index == 0,
-                      title: Text(doc['Title'] ?? 'No Title',
-                          style: TextStyle(
-                              color: AppTheme.textPrimary,
-                              fontWeight: FontWeight.w600)),
+                      title: Text(
+                        doc['Title'] ?? 'No Title',
+                        style: TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                       children: [
                         Padding(
                           padding: const EdgeInsets.all(16.0),
-                          child: Text(doc['Content'] ?? '',
-                              style:
-                                  AppTheme.codeTextStyle.copyWith(fontSize: 13)),
+                          child: Text(
+                            doc['Content'] ?? '',
+                            style: AppTheme.codeTextStyle.copyWith(
+                              fontSize: 13,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -580,16 +631,19 @@ class _DocumentViewState extends State<DocumentView> {
 
     final manifestFile = archive.findFile('manifest.json');
     if (manifestFile == null) throw Exception('manifest.json not found');
-    final manifest =
-        json.decode(utf8.decode(manifestFile.content as List<int>));
+    final manifest = json.decode(
+      utf8.decode(manifestFile.content as List<int>),
+    );
 
     final contentsFile = archive.findFile('contents');
     if (contentsFile == null) throw Exception('contents file not found');
 
-    final contentsArchive =
-        ZipDecoder().decodeBytes(contentsFile.content as List<int>);
-    final dbFile =
-        contentsArchive.files.firstWhere((f) => f.name.endsWith('.db'));
+    final contentsArchive = ZipDecoder().decodeBytes(
+      contentsFile.content as List<int>,
+    );
+    final dbFile = contentsArchive.files.firstWhere(
+      (f) => f.name.endsWith('.db'),
+    );
 
     final tempDir = await getTemporaryDirectory();
     final dbPath = p.join(tempDir.path, dbFile.name);
@@ -599,8 +653,10 @@ class _DocumentViewState extends State<DocumentView> {
     List<Map<String, dynamic>> documents = [];
 
     try {
-      final docMaps = await db.query('Document',
-          columns: ['DocumentId', 'Title', 'Content']);
+      final docMaps = await db.query(
+        'Document',
+        columns: ['DocumentId', 'Title', 'Content'],
+      );
 
       for (var docMap in docMaps) {
         final docId = docMap['DocumentId'] as int;
@@ -608,8 +664,9 @@ class _DocumentViewState extends State<DocumentView> {
         String contentText = '';
 
         try {
-          final columns =
-              await db.rawQuery('PRAGMA table_info(DocumentParagraph)');
+          final columns = await db.rawQuery(
+            'PRAGMA table_info(DocumentParagraph)',
+          );
           String? targetColumn;
           for (var col in columns) {
             final name = col['name'].toString().toLowerCase();
@@ -619,10 +676,12 @@ class _DocumentViewState extends State<DocumentView> {
             }
           }
           if (targetColumn != null) {
-            final paraMaps = await db.query('DocumentParagraph',
-                columns: [targetColumn],
-                where: 'DocumentId = ?',
-                whereArgs: [docId]);
+            final paraMaps = await db.query(
+              'DocumentParagraph',
+              columns: [targetColumn],
+              where: 'DocumentId = ?',
+              whereArgs: [docId],
+            );
             if (paraMaps.isNotEmpty) {
               contentText = paraMaps
                   .map((p) => p[targetColumn]?.toString() ?? '')
@@ -633,13 +692,16 @@ class _DocumentViewState extends State<DocumentView> {
 
         if (contentText.isEmpty) {
           try {
-            final unitMaps = await db.query('TextUnit',
-                columns: ['Text'],
-                where: 'DocumentId = ?',
-                whereArgs: [docId]);
+            final unitMaps = await db.query(
+              'TextUnit',
+              columns: ['Text'],
+              where: 'DocumentId = ?',
+              whereArgs: [docId],
+            );
             if (unitMaps.isNotEmpty) {
-              contentText =
-                  unitMaps.map((u) => u['Text']?.toString() ?? '').join('\n\n');
+              contentText = unitMaps
+                  .map((u) => u['Text']?.toString() ?? '')
+                  .join('\n\n');
             }
           } catch (_) {}
         }
@@ -699,7 +761,8 @@ class _DocumentViewState extends State<DocumentView> {
       selectionColor: AppTheme.accent.withValues(alpha: 0.3),
       textStyleConfiguration: TextStyleConfiguration(
         text: AppTheme.codeTextStyle.copyWith(
-          fontSize: 16, // Tamanho base fixo para Markdown. Alterações via toolbar serão por seleção.
+          fontSize:
+              16, // Tamanho base fixo para Markdown. Alterações via toolbar serão por seleção.
           height: 1.5,
           color: AppTheme.textPrimary,
           fontWeight: FontWeight.normal,
@@ -722,8 +785,9 @@ class _DocumentViewState extends State<DocumentView> {
       ),
     );
 
-    final path =
-        widget.tabs.isNotEmpty ? widget.tabs[widget.activeTabIndex] : '';
+    final path = widget.tabs.isNotEmpty
+        ? widget.tabs[widget.activeTabIndex]
+        : '';
     final metadata = widget.noteMetadataMap[path] ?? NoteMetadata();
 
     // Custom Enter key behavior:
@@ -779,7 +843,8 @@ class _DocumentViewState extends State<DocumentView> {
         if (node == null) return KeyEventResult.ignored;
 
         // If at the beginning of a list item, try block indentation
-        final isList = node.type == BulletedListBlockKeys.type ||
+        final isList =
+            node.type == BulletedListBlockKeys.type ||
             node.type == NumberedListBlockKeys.type ||
             node.type == TodoListBlockKeys.type;
 
@@ -815,8 +880,7 @@ class _DocumentViewState extends State<DocumentView> {
       header: _buildNoteHeader(path, metadata),
       characterShortcutEvents: [
         customInsertNewLine,
-        ...standardCharacterShortcutEvents
-            .where((e) => e.character != '\n'),
+        ...standardCharacterShortcutEvents.where((e) => e.character != '\n'),
       ],
       commandShortcutEvents: [
         customTabCommand,
@@ -825,7 +889,9 @@ class _DocumentViewState extends State<DocumentView> {
       blockComponentBuilders: {
         ...standardBlockComponentBuilderMap,
         'divider': CustomHorizontalRuleBuilder(
-          onFinishSection: widget.speechController?.nextSection,
+          speechController: widget.speechController,
+          editorState: _editorState!,
+          onShowSpeechSummary: widget.onShowSpeechSummary,
         ),
       },
     );
@@ -843,10 +909,7 @@ class _DocumentViewState extends State<DocumentView> {
           TextField(
             controller: _titleController,
             onChanged: (val) {
-              widget.onMetadataChanged(
-                path,
-                metadata.copyWith(title: val),
-              );
+              widget.onMetadataChanged(path, metadata.copyWith(title: val));
             },
             style: TextStyle(
               color: AppTheme.textPrimary,
@@ -931,16 +994,19 @@ class _DocumentViewState extends State<DocumentView> {
           onChanged: (text) {
             if (widget.tabs.isNotEmpty &&
                 widget.activeTabIndex < widget.tabs.length) {
-              widget.onContentChanged(
-                  widget.tabs[widget.activeTabIndex], text);
+              widget.onContentChanged(widget.tabs[widget.activeTabIndex], text);
             }
           },
           maxLines: null,
           expands: true,
           style: AppTheme.codeTextStyle.copyWith(
             fontSize: widget.textStyleController.fontSize,
-            fontWeight: widget.textStyleController.isBold ? FontWeight.bold : FontWeight.normal,
-            fontStyle: widget.textStyleController.isItalic ? FontStyle.italic : FontStyle.normal,
+            fontWeight: widget.textStyleController.isBold
+                ? FontWeight.bold
+                : FontWeight.normal,
+            fontStyle: widget.textStyleController.isItalic
+                ? FontStyle.italic
+                : FontStyle.normal,
           ),
           decoration: const InputDecoration(
             border: InputBorder.none,
@@ -968,15 +1034,14 @@ class _DocumentViewState extends State<DocumentView> {
             child: widget.tabs.isEmpty
                 ? _buildEmptyState()
                 : _isJwPub(widget.tabs[widget.activeTabIndex])
-                    ? _buildPublicationView(widget.tabs[widget.activeTabIndex])
-                    : _isPdf(widget.tabs[widget.activeTabIndex])
-                        ? _buildPdfView(widget.tabs[widget.activeTabIndex])
-                        : _isDocx(widget.tabs[widget.activeTabIndex])
-                            ? _buildDocxView(
-                                widget.tabs[widget.activeTabIndex])
-                            : _isMarkdown
-                                ? _buildMarkdownEditor()
-                                : _buildPlainTextEditor(),
+                ? _buildPublicationView(widget.tabs[widget.activeTabIndex])
+                : _isPdf(widget.tabs[widget.activeTabIndex])
+                ? _buildPdfView(widget.tabs[widget.activeTabIndex])
+                : _isDocx(widget.tabs[widget.activeTabIndex])
+                ? _buildDocxView(widget.tabs[widget.activeTabIndex])
+                : _isMarkdown
+                ? _buildMarkdownEditor()
+                : _buildPlainTextEditor(),
           ),
         ],
       ),
@@ -1021,10 +1086,7 @@ class _DocumentViewState extends State<DocumentView> {
               Text(
                 'Organize suas ideias e anotações com simplicidade.',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 16,
-                ),
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 16),
               ),
               const SizedBox(height: 48),
 
@@ -1112,10 +1174,7 @@ class _DocumentViewState extends State<DocumentView> {
             Text(
               description,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 11,
-              ),
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
             ),
           ],
         ),
@@ -1152,8 +1211,7 @@ class _DocumentViewState extends State<DocumentView> {
                     child: InkWell(
                       onTap: () => widget.onSelectTab(index),
                       child: Container(
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 16),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
                         decoration: BoxDecoration(
                           color: isSelected
                               ? AppTheme.background
@@ -1161,35 +1219,44 @@ class _DocumentViewState extends State<DocumentView> {
                           border: isSelected
                               ? Border(
                                   bottom: BorderSide(
-                                      color: AppTheme.accent, width: 2))
+                                    color: AppTheme.accent,
+                                    width: 2,
+                                  ),
+                                )
                               : null,
                         ),
                         child: Row(
                           children: [
-                            Icon(_getFileIcon(filename),
-                                size: 14,
-                                color: isSelected
-                                    ? AppTheme.accent
-                                    : AppTheme.textSecondary),
+                            Icon(
+                              _getFileIcon(filename),
+                              size: 14,
+                              color: isSelected
+                                  ? AppTheme.accent
+                                  : AppTheme.textSecondary,
+                            ),
                             const SizedBox(width: 8),
-                            Text(filename,
-                                style: TextStyle(
-                                  color: isSelected
-                                      ? AppTheme.textPrimary
-                                      : AppTheme.textSecondary,
-                                  fontSize: 13,
-                                  fontWeight: isSelected
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                )),
+                            Text(
+                              filename,
+                              style: TextStyle(
+                                color: isSelected
+                                    ? AppTheme.textPrimary
+                                    : AppTheme.textSecondary,
+                                fontSize: 13,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
                             const SizedBox(width: 8),
                             Tooltip(
                               message: 'Fechar Aba',
                               child: InkWell(
                                 onTap: () => widget.onCloseTab(index),
-                                child: Icon(Icons.close,
-                                    size: 14,
-                                    color: AppTheme.textSecondary),
+                                child: Icon(
+                                  Icons.close,
+                                  size: 14,
+                                  color: AppTheme.textSecondary,
+                                ),
                               ),
                             ),
                           ],
@@ -1201,16 +1268,13 @@ class _DocumentViewState extends State<DocumentView> {
               ),
             ),
           ),
-          Material(
-            color: Colors.transparent,
-            child: IconButton(
-              icon: const Icon(Icons.add, size: 18),
-              onPressed: widget.onNewTab,
-              tooltip: 'Nova Aba',
-              splashRadius: 18,
-              padding: EdgeInsets.zero,
-              constraints:
-                  const BoxConstraints(minWidth: 36, minHeight: 36),
+          GestureDetector(
+            onTap: widget.onNewTab,
+            child: Container(
+              width: 36,
+              height: 36,
+              alignment: Alignment.center,
+              child: const Icon(Icons.add, size: 18),
             ),
           ),
         ],
@@ -1222,16 +1286,20 @@ class _DocumentViewState extends State<DocumentView> {
     final text = _plainTextController.text;
     final selection = _plainTextController.selection;
     final tabString = widget.insertSpaces ? ' ' * widget.tabWidth : '\t';
-    final newText =
-        text.replaceRange(selection.start, selection.end, tabString);
+    final newText = text.replaceRange(
+      selection.start,
+      selection.end,
+      tabString,
+    );
     final newSelection = TextSelection.collapsed(
-        offset: selection.start + tabString.length);
-    _plainTextController.value =
-        TextEditingValue(text: newText, selection: newSelection);
-    if (widget.tabs.isNotEmpty &&
-        widget.activeTabIndex < widget.tabs.length) {
-      widget.onContentChanged(
-          widget.tabs[widget.activeTabIndex], newText);
+      offset: selection.start + tabString.length,
+    );
+    _plainTextController.value = TextEditingValue(
+      text: newText,
+      selection: newSelection,
+    );
+    if (widget.tabs.isNotEmpty && widget.activeTabIndex < widget.tabs.length) {
+      widget.onContentChanged(widget.tabs[widget.activeTabIndex], newText);
     }
   }
 
@@ -1244,75 +1312,103 @@ class _DocumentViewState extends State<DocumentView> {
     final match = RegExp(r'^\s*').firstMatch(currentLine);
     final indentation = match?.group(0) ?? '';
     final insertString = '\n$indentation';
-    final newText =
-        text.replaceRange(selection.start, selection.end, insertString);
+    final newText = text.replaceRange(
+      selection.start,
+      selection.end,
+      insertString,
+    );
     final newSelection = TextSelection.collapsed(
-        offset: selection.start + insertString.length);
-    _plainTextController.value =
-        TextEditingValue(text: newText, selection: newSelection);
-    if (widget.tabs.isNotEmpty &&
-        widget.activeTabIndex < widget.tabs.length) {
-      widget.onContentChanged(
-          widget.tabs[widget.activeTabIndex], newText);
+      offset: selection.start + insertString.length,
+    );
+    _plainTextController.value = TextEditingValue(
+      text: newText,
+      selection: newSelection,
+    );
+    if (widget.tabs.isNotEmpty && widget.activeTabIndex < widget.tabs.length) {
+      widget.onContentChanged(widget.tabs[widget.activeTabIndex], newText);
     }
   }
+
   void _updateSectionsMarkdown() {
     if (_editorState == null || widget.onSectionsChanged == null) return;
 
     final nodes = _editorState!.document.root.children;
     List<String> sections = [];
     String currentTitle = '';
-    
+
     for (var node in nodes) {
       if (node.type == 'divider') {
         sections.add(currentTitle.trim());
         currentTitle = '';
-      } else if (currentTitle.isEmpty && (node.type == 'heading' || node.type == 'paragraph')) {
+      } else if (currentTitle.isEmpty &&
+          (node.type == 'heading' || node.type == 'paragraph')) {
         final delta = node.attributes['delta'];
         String text = '';
         if (delta is Delta) {
           text = delta.toPlainText().trim();
         }
         if (text.isNotEmpty) {
-          currentTitle = text.length > 30 ? '${text.substring(0, 30)}...' : text;
+          currentTitle = text.length > 30
+              ? '${text.substring(0, 30)}...'
+              : text;
         }
       }
     }
     // Add last section
     sections.add(currentTitle.trim());
-    
+
     widget.onSectionsChanged!(sections);
   }
 }
 
 class CustomHorizontalRuleBuilder extends BlockComponentBuilder {
-  final VoidCallback? onFinishSection;
+  final SpeechController? speechController;
+  final EditorState editorState;
+  final VoidCallback? onShowSpeechSummary;
 
-  CustomHorizontalRuleBuilder({this.onFinishSection});
+  CustomHorizontalRuleBuilder({
+    this.speechController,
+    required this.editorState,
+    this.onShowSpeechSummary,
+  });
 
   @override
   BlockComponentWidget build(BlockComponentContext blockContext) {
     final standardBuilder = standardBlockComponentBuilderMap['divider']!;
     final innerWidget = standardBuilder.build(blockContext);
-    
+
+    // Encontrar o índice deste divisor na lista de divisores do documento
+    int dividerIndex = 0;
+    final root = editorState.document.root;
+    final dividers = root.children.where((n) => n.type == 'divider').toList();
+    dividerIndex = dividers.indexOf(blockContext.node);
+
     return CustomHorizontalRule(
       key: blockContext.node.key,
       inner: innerWidget,
-      onFinishSection: onFinishSection,
+      speechController: speechController,
+      sectionIndex: dividerIndex,
+      onShowSpeechSummary: onShowSpeechSummary,
     );
   }
 
   @override
   BlockComponentValidate get validate => (node) => node.type == 'divider';
 }
-class CustomHorizontalRule extends StatelessWidget implements BlockComponentWidget {
+
+class CustomHorizontalRule extends StatelessWidget
+    implements BlockComponentWidget {
   final BlockComponentWidget inner;
-  final VoidCallback? onFinishSection;
+  final SpeechController? speechController;
+  final int sectionIndex;
+  final VoidCallback? onShowSpeechSummary;
 
   const CustomHorizontalRule({
     super.key,
     required this.inner,
-    this.onFinishSection,
+    this.speechController,
+    required this.sectionIndex,
+    this.onShowSpeechSummary,
   });
 
   @override
@@ -1325,53 +1421,201 @@ class CustomHorizontalRule extends StatelessWidget implements BlockComponentWidg
   BlockComponentActionBuilder? get actionBuilder => inner.actionBuilder;
 
   @override
-  BlockComponentActionTrailingBuilder? get actionTrailingBuilder => inner.actionTrailingBuilder;
+  BlockComponentActionTrailingBuilder? get actionTrailingBuilder =>
+      inner.actionTrailingBuilder;
 
   @override
   BlockComponentConfiguration get configuration => inner.configuration;
 
   @override
   Widget build(BuildContext context) {
-    bool isHovered = false;
-    return StatefulBuilder(
-      builder: (context, setState) {
-        return MouseRegion(
-          onEnter: (_) => setState(() => isHovered = true),
-          onExit: (_) => setState(() => isHovered = false),
-          child: Stack(
-            alignment: Alignment.center,
+    if (speechController == null) return inner;
+
+    return ListenableBuilder(
+      listenable: speechController!,
+      builder: (context, _) {
+        final isCurrent = speechController!.currentSectionIndex == sectionIndex;
+        final isFinished = speechController!.currentSectionIndex > sectionIndex;
+
+        // Tempo da seção para a barra de progresso
+        double progress = 0.0;
+        if (isCurrent && sectionIndex < speechController!.sections.length) {
+          final section = speechController!.sections[sectionIndex];
+          if (section.adjustedTargetDuration != Duration.zero) {
+            progress = section.elapsedDuration.inSeconds /
+                section.adjustedTargetDuration.inSeconds;
+          }
+        }
+
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
             children: [
-              inner,
-              if (isHovered)
-                Positioned(
-                  right: 48,
-                  child: GestureDetector(
-                    onTap: onFinishSection,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: AppTheme.accent,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
+              if (isCurrent || isFinished)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Text(
+                        isFinished ? 'Seção Concluída' : 'Seção Atual',
+                        style: AppTheme.uiStyle.copyWith(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: isFinished
+                              ? AppTheme.accent
+                              : AppTheme.textSecondary,
+                        ),
+                      ),
+                      const Spacer(),
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () async {
+                            final newDuration = await DurationPickerDialog.show(
+                              context,
+                              initialDuration: speechController!
+                                  .sections[sectionIndex].targetDuration,
+                              title: 'Meta da Seção',
+                            );
+                            if (newDuration != null) {
+                              speechController!.updateTargetDuration(
+                                  sectionIndex, newDuration);
+                            }
+                          },
+                          borderRadius: BorderRadius.circular(4),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.edit_calendar_rounded,
+                                    size: 12, color: AppTheme.accent),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${_formatDuration(speechController!.sections[sectionIndex].elapsedDuration)} / ${_formatDuration(speechController!.sections[sectionIndex].adjustedTargetDuration)}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    fontFamily: 'monospace',
+                                    color: isCurrent
+                                        ? AppTheme.accent
+                                        : AppTheme.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ],
+                        ),
                       ),
-                      child: const Icon(
-                        Icons.timer_outlined,
-                        size: 14,
-                        color: Colors.white,
-                      ),
-                    ),
+                    ],
                   ),
                 ),
+              SizedBox(
+                height: 24,
+                child: Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    // Linha do divisor
+                    Container(
+                      height: 2,
+                      color: isFinished
+                          ? AppTheme.accent.withValues(alpha: 0.3)
+                          : (isCurrent
+                              ? AppTheme.accent.withValues(alpha: 0.3)
+                              : AppTheme.border),
+                    ),
+
+                    // Barra de progresso (somente se for a seção atual)
+                    if (isCurrent)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: progress.clamp(0.0, 1.0),
+                            backgroundColor: Colors.transparent,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              progress > 1.0 ? AppTheme.error : AppTheme.accent,
+                            ),
+                            minHeight: 4,
+                          ),
+                        ),
+                      ),
+
+                    // Botão de ação
+                    if (isCurrent || isFinished || speechController!.isSessionFinished)
+                      Positioned(
+                        right: 0,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            if (speechController!.isSessionFinished) {
+                              onShowSpeechSummary?.call();
+                              return;
+                            }
+                            if (isCurrent) {
+                              speechController!.nextSection();
+                            }
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: speechController!.isSessionFinished
+                                  ? Colors.amber.shade700
+                                  : AppTheme.accent,
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  speechController!.isSessionFinished
+                                      ? Icons.assessment_rounded
+                                      : (isFinished ? Icons.check : Icons.skip_next),
+                                  size: 16,
+                                  color: Colors.white,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  speechController!.isSessionFinished
+                                      ? 'VER RESUMO'
+                                      : (isFinished ? 'CONCLUÍDO' : 'PRÓXIMA'),
+                                  style: AppTheme.uiStyle.copyWith(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ],
           ),
         );
-      }
+      },
     );
+  }
+
+  String _formatDuration(Duration d) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(d.inMinutes.remainder(60));
+    final seconds = twoDigits(d.inSeconds.remainder(60));
+    return "$minutes:$seconds";
   }
 }
