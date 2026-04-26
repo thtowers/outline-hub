@@ -3,8 +3,10 @@ import '../theme/app_theme.dart';
 import '../models/edit_format.dart';
 import '../controllers/text_style_controller.dart';
 import 'text_style_toolbar.dart';
+import '../controllers/theme_controller.dart';
 
 class HeaderBar extends StatelessWidget {
+  final ThemeController themeController;
   final VoidCallback? onSearchToggle;
   final VoidCallback? onTerminalToggle;
   final VoidCallback? onNewTab;
@@ -24,10 +26,13 @@ class HeaderBar extends StatelessWidget {
   final TextStyleController textStyleController;
   final VoidCallback? onZenModeToggle;
   final VoidCallback? onSettingsToggle;
+  final VoidCallback? onWebCapture;
   final VoidCallback? onSpeechToggle;
+  final VoidCallback? onNotesToggle;
 
   const HeaderBar({
     super.key,
+    required this.themeController,
     this.onSearchToggle,
     this.onTerminalToggle,
     this.onNewTab,
@@ -45,7 +50,9 @@ class HeaderBar extends StatelessWidget {
     required this.textStyleController,
     this.onZenModeToggle,
     this.onSettingsToggle,
+    this.onWebCapture,
     this.onSpeechToggle,
+    this.onNotesToggle,
   });
 
   @override
@@ -53,97 +60,132 @@ class HeaderBar extends StatelessWidget {
     return Container(
       height: 48,
       color: AppTheme.surface,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8.0),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            // Left actions
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.folder_open_outlined, size: 20),
-                  onPressed: onOpenFolder ?? () {},
-                  splashRadius: 20,
-                  tooltip: 'Abrir Pasta',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.file_open_outlined, size: 20),
-                  onPressed: onOpenFile ?? () {},
-                  splashRadius: 20,
-                  tooltip: 'Abrir Arquivo',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.save_outlined, size: 20),
-                  onPressed: onSave ?? () {},
-                  splashRadius: 20,
-                  tooltip: 'Salvar Arquivo (Ctrl+S)',
-                ),
-              ],
-            ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: constraints.maxWidth),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Left actions
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.folder_open_outlined, size: 20),
+                          onPressed: onOpenFolder ?? () {},
+                          splashRadius: 20,
+                          tooltip: 'Abrir Pasta',
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.file_open_outlined, size: 20),
+                          onPressed: onOpenFile ?? () {},
+                          splashRadius: 20,
+                          tooltip: 'Abrir Arquivo',
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.save_outlined, size: 20),
+                          onPressed: onSave ?? () {},
+                          splashRadius: 20,
+                          tooltip: 'Salvar Arquivo (Ctrl+S)',
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.public_rounded, size: 20),
+                          onPressed: onWebCapture ?? () {},
+                          splashRadius: 20,
+                          tooltip: 'Capturar de Site',
+                        ),
+                      ],
+                    ),
 
-            Flexible(
-              child: Container(
-                height: 32,
-                constraints: const BoxConstraints(maxWidth: 800),
-                decoration: BoxDecoration(
-                  color: AppTheme.background,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                    color: AppTheme.textSecondary.withValues(alpha: 0.2),
-                  ),
-                ),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildTabSettingButton(context),
-                      const VerticalDivider(width: 1),
-                      _buildFormatSettingButton(context),
-                      const VerticalDivider(width: 1),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: TextStyleToolbar(
-                          controller: textStyleController,
+                    Container(
+                      height: 32,
+                      constraints: const BoxConstraints(maxWidth: 800),
+                      decoration: BoxDecoration(
+                        color: AppTheme.background,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: AppTheme.textSecondary.withValues(alpha: 0.2),
                         ),
                       ),
-                    ],
-                  ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildTabSettingButton(context),
+                          const VerticalDivider(width: 1),
+                          _buildFormatSettingButton(context),
+                          const VerticalDivider(width: 1),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: TextStyleToolbar(
+                              controller: textStyleController,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Right actions
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ListenableBuilder(
+                          listenable: themeController,
+                          builder: (context, _) {
+                            return IconButton(
+                              icon: Icon(
+                                themeController.isDarkMode
+                                    ? Icons.light_mode_outlined
+                                    : Icons.dark_mode_outlined,
+                                size: 20,
+                              ),
+                              onPressed: () => themeController.toggleTheme(),
+                              splashRadius: 20,
+                              tooltip: 'Alternar Tema (Claro/Escuro)',
+                            );
+                          },
+                        ),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(Icons.timer_outlined, size: 20),
+                          onPressed: onSpeechToggle ?? () {},
+                          splashRadius: 20,
+                          tooltip: 'Cronômetro',
+                        ),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(Icons.history_edu_outlined, size: 20),
+                          onPressed: onNotesToggle ?? () {},
+                          splashRadius: 20,
+                          tooltip: 'Anotações',
+                        ),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(Icons.settings_outlined, size: 20),
+                          onPressed: onSettingsToggle ?? () {},
+                          splashRadius: 20,
+                          tooltip: 'Configurações',
+                        ),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(Icons.open_in_full, size: 18),
+                          onPressed: onZenModeToggle ?? () {},
+                          splashRadius: 20,
+                          tooltip: 'Alternar Tela Cheia',
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
-
-            // Right actions
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.timer_outlined, size: 20),
-                  onPressed: onSpeechToggle ?? () {},
-                  splashRadius: 20,
-                  tooltip: 'Cronômetror',
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  icon: const Icon(Icons.settings_outlined, size: 20),
-                  onPressed: onSettingsToggle ?? () {},
-                  splashRadius: 20,
-                  tooltip: 'Configurações',
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  icon: const Icon(Icons.open_in_full, size: 18),
-                  onPressed: onZenModeToggle ?? () {},
-                  splashRadius: 20,
-                  tooltip: 'Alternar Tela Cheia',
-                ),
-                const SizedBox(width: 4),
-              ],
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -211,7 +253,9 @@ class HeaderBar extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
-                    children: EditFormat.values.map((format) {
+                    children: EditFormat.values
+                        .where((f) => f != EditFormat.jwpub)
+                        .map((format) {
                       final isSelected = format == currentFormat;
                       return InkWell(
                         onTap: () {
@@ -271,11 +315,16 @@ class HeaderBar extends StatelessWidget {
         return Icons.description_outlined;
       case EditFormat.txt:
         return Icons.text_snippet_outlined;
+      case EditFormat.pdf:
+        return Icons.picture_as_pdf_outlined;
+      case EditFormat.docx:
+        return Icons.article_outlined;
+      case EditFormat.jwpub:
+        return Icons.library_books_outlined;
     }
   }
 
   void _showTabSettings(BuildContext context) {
-    // Capture local state for the dialog to ensure immediate UI updates
     int localTabWidth = tabWidth;
     bool localAutoIndent = autoIndent;
     bool localInsertSpaces = insertSpaces;

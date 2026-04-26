@@ -8,14 +8,17 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart' hide Transaction;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:pdfrx/pdfrx.dart';
-import 'package:docx_to_text/docx_to_text.dart';
+import '../services/docx_service.dart';
 import 'dart:convert';
 import '../theme/app_theme.dart';
 import 'dart:io';
 import '../models/edit_format.dart';
 import '../models/note_metadata.dart';
 import '../controllers/text_style_controller.dart';
+import 'package:flutter/gestures.dart';
+import '../models/highlight_note.dart';
 import 'duration_picker_dialog.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class DocumentView extends StatefulWidget {
   final List<String> tabs;
@@ -35,11 +38,13 @@ class DocumentView extends StatefulWidget {
   final EditFormat? currentFormat;
   final Map<String, NoteMetadata> noteMetadataMap;
   final Function(String, NoteMetadata) onMetadataChanged;
-  final void Function(int line, int column)? onPositionChanged;
-  final void Function(List<String> sections)? onSectionsChanged;
+  final Function(int, int)? onPositionChanged;
+  final Function(List<String>)? onSectionsChanged;
+  final Function(String, String)? onRename;
   final TextStyleController textStyleController;
   final SpeechController? speechController;
   final VoidCallback? onShowSpeechSummary;
+  final Function(String noteId)? onShowNote;
 
   const DocumentView({
     super.key,
@@ -62,8 +67,10 @@ class DocumentView extends StatefulWidget {
     required this.textStyleController,
     this.onPositionChanged,
     this.onSectionsChanged,
+    this.onRename,
     this.speechController,
     this.onShowSpeechSummary,
+    this.onShowNote,
     this.currentFormat,
   });
 
@@ -87,9 +94,19 @@ class _DocumentViewState extends State<DocumentView> {
   bool _isApplyingStyle = false;
   Timer? _debounceTimer;
 
+  // PDF Viewer (pdfrx)
+  final PdfViewerController _pdfController = PdfViewerController();
+  List<PdfTextRanges>? _pdfSelection;
+  PdfDocument? _currentPdfDocument;
+
+  StreamSubscription? _deleteSubscription;
+
   @override
   void initState() {
     super.initState();
+    _deleteSubscription = widget.speechController?.onDeleteSection.listen((index) {
+      _deleteDividerAtIndex(index);
+    });
     _plainTextController = TextEditingController();
     _plainTextController.addListener(() {
       if (widget.tabs.isNotEmpty &&
@@ -232,18 +249,96 @@ class _DocumentViewState extends State<DocumentView> {
         }
       }
     };
+    ctrl.onToggleNote = _onToggleNote;
+  }
+
+  void _deleteDividerAtIndex(int index) {
+    if (_editorState == null) return;
+    final root = _editorState!.document.root;
+    final dividers = root.children.where((n) => n.type == 'divider').toList();
+    if (index >= 0 && index < dividers.length) {
+      final node = dividers[index];
+      final transaction = _editorState!.transaction;
+      transaction.deleteNode(node);
+      _editorState!.apply(transaction);
+    }
   }
 
   void _onStyleChanged() {
     if (mounted) setState(() {});
   }
 
-  bool get _isMarkdown {
-    if (widget.tabs.isEmpty) return false;
-    final path = widget.tabs[widget.activeTabIndex];
+  void _onToggleNote() {
+    if (_editorState != null) {
+      final selection = _editorState!.selection;
+      if (selection != null && !selection.isCollapsed) {
+        final attributes = _editorState!.getDeltaAttributesInSelectionStart();
+
+        if (attributes != null && attributes.containsKey('note')) {
+          _editorState!.formatDelta(selection, {'note': null});
+        } else {
+          final highlightId = 'text_h_${DateTime.now().millisecondsSinceEpoch}';
+          final path = widget.tabs[widget.activeTabIndex];
+
+          // Captura o texto do bloco atual (fallback seguro para compilação)
+          final selectedText =
+              _editorState!.document
+                  .nodeAtPath(selection.start.path)
+                  ?.delta
+                  ?.toPlainText() ??
+              "Destaque";
+
+          final metadata = _getEffectiveMetadata(path);
+
+          final newHighlight = HighlightNote(
+            id: highlightId,
+            content: '',
+            highlightedText: selectedText,
+            colorValue: 0x80FFFF00, // Amarelo semi-transparente
+            type: HighlightType.text,
+            startIndex: selection.startIndex,
+            endIndex: selection.endIndex,
+            createdAt: DateTime.now(),
+          );
+
+          final updatedHighlights = List<HighlightNote>.from(
+            metadata.highlights,
+          )..add(newHighlight);
+          final updatedMetadata = metadata.copyWith(
+            highlights: updatedHighlights,
+          );
+
+          widget.onMetadataChanged(path, updatedMetadata);
+          _editorState!.formatDelta(selection, {'note': highlightId});
+
+          // Abre o painel lateral
+          widget.onShowNote?.call(highlightId);
+        }
+      }
+    }
+  }
+
+  void _onSelectionChanged() {
+    if (_isApplyingStyle) {
+      return;
+    }
+
+    final selection = _editorState?.selection;
+    if (selection == null) return;
+
+    final attributes = _editorState!.getDeltaAttributesInSelectionStart();
+    if (attributes != null && attributes.containsKey('note')) {
+      final fullNoteId = attributes['note'] as String;
+      widget.onShowNote?.call(fullNoteId);
+    }
+  }
+
+  bool _isMarkdown(String path) {
     final isMd =
         path.toLowerCase().endsWith('.md') ||
-        widget.currentFormat == EditFormat.markdown;
+        path.toLowerCase().endsWith('.docx') ||
+        widget.currentFormat == EditFormat.markdown ||
+        widget.currentFormat == EditFormat.docx;
     debugPrint(
       'DocumentView: _isMarkdown for $path = $isMd (format: ${widget.currentFormat})',
     );
@@ -254,17 +349,24 @@ class _DocumentViewState extends State<DocumentView> {
     if (widget.tabs.isEmpty) return '';
     final path = widget.tabs[widget.activeTabIndex];
 
-    if (widget.fileContents.containsKey(path))
+    if (widget.fileContents.containsKey(path)) {
       return widget.fileContents[path]!;
+    }
 
     try {
       if (path.toLowerCase().endsWith('.jwpub') ||
-          path.toLowerCase().endsWith('.pdf') ||
-          path.toLowerCase().endsWith('.docx')) {
+          path.toLowerCase().endsWith('.pdf')) {
         return '';
       }
       final file = File(path);
-      if (file.existsSync()) return file.readAsStringSync();
+      if (file.existsSync()) {
+        if (path.toLowerCase().endsWith('.docx')) {
+          // Para DOCX, retornamos o texto extraído
+          final bytes = file.readAsBytesSync();
+          return DocxService.extractText(bytes);
+        }
+        return file.readAsStringSync();
+      }
       return '';
     } catch (e) {
       return '';
@@ -272,11 +374,14 @@ class _DocumentViewState extends State<DocumentView> {
   }
 
   void _loadCurrentTab() {
+    final path = widget.tabs.isNotEmpty
+        ? widget.tabs[widget.activeTabIndex]
+        : '';
     final content = _getContentForCurrentTab();
     debugPrint(
-      'DocumentView: Loading tab. isMarkdown=$_isMarkdown, content length=${content.length}',
+      'DocumentView: Loading tab. isMarkdown=${_isMarkdown(path)}, content length=${content.length}',
     );
-    if (_isMarkdown) {
+    if (_isMarkdown(path)) {
       _loadMarkdownEditor(content);
     } else {
       setState(() {
@@ -295,7 +400,7 @@ class _DocumentViewState extends State<DocumentView> {
 
     if (_lastLoadedMarkdownPath == path && _editorState != null) {
       debugPrint(
-        'DocumentView: Editor already loaded for this path, skipping.',
+        'DocumentView: Editor already loaded for this path, skipping',
       );
       return;
     }
@@ -315,7 +420,9 @@ class _DocumentViewState extends State<DocumentView> {
       }
 
       setState(() {
+        _editorState?.selectionNotifier.removeListener(_onSelectionChanged);
         _editorState = EditorState(document: document);
+        _editorState!.selectionNotifier.addListener(_onSelectionChanged);
         debugPrint('DocumentView: EditorState initialized.');
       });
 
@@ -345,17 +452,39 @@ class _DocumentViewState extends State<DocumentView> {
 
         // 1. Update Position (Line/Col)
         if (widget.onPositionChanged != null) {
-          int lineIndex = 0;
+          int lineCount = 1;
+          int colCount = 1;
+
           final currentPath = selection.start.path;
           if (currentPath.isNotEmpty) {
-            lineIndex = currentPath.first + 1;
+            final root = _editorState!.document.root;
+            final targetNodeIndex = currentPath.first;
+
+            for (int i = 0; i < targetNodeIndex && i < root.children.length; i++) {
+              final node = root.children[i];
+              final text = node.delta?.toPlainText() ?? '';
+              lineCount += text.isEmpty ? 1 : text.split('\n').length;
+            }
+
+            if (targetNodeIndex < root.children.length) {
+              final currentNode = root.children[targetNodeIndex];
+              final currentText = currentNode.delta?.toPlainText() ?? '';
+              final offset = selection.start.offset;
+
+              final textBeforeCursor = currentText.substring(0, offset.clamp(0, currentText.length));
+              final linesInCurrentBlock = textBeforeCursor.split('\n');
+              
+              lineCount += linesInCurrentBlock.length - 1;
+              colCount = linesInCurrentBlock.last.length + 1;
+            }
           }
-          widget.onPositionChanged!(lineIndex, selection.start.offset + 1);
+          widget.onPositionChanged!(lineCount, colCount);
         }
 
         // 2. Detect Styles in Selection (Detectando Atributos Inline)
-        if (_isApplyingStyle)
+        if (_isApplyingStyle) {
           return; // Ignora se estivermos aplicando um estilo manualmente
+        }
 
         final styles = _editorState!.getDeltaAttributesInSelectionStart() ?? {};
 
@@ -454,7 +583,7 @@ class _DocumentViewState extends State<DocumentView> {
           ? widget.tabs[widget.activeTabIndex]
           : null;
       if (newPath != null) {
-        final meta = widget.noteMetadataMap[newPath] ?? NoteMetadata();
+        final meta = _getEffectiveMetadata(newPath);
         _titleController.text = meta.title;
         _descController.text = meta.description;
       }
@@ -464,6 +593,7 @@ class _DocumentViewState extends State<DocumentView> {
 
   @override
   void dispose() {
+    _deleteSubscription?.cancel();
     _plainTextController.dispose();
     _plainTextFocusNode.dispose();
     _titleController.dispose();
@@ -487,43 +617,447 @@ class _DocumentViewState extends State<DocumentView> {
     return Icons.insert_drive_file;
   }
 
-  bool _isJwPub(String path) => path.toLowerCase().endsWith('.jwpub');
-  bool _isPdf(String path) => path.toLowerCase().endsWith('.pdf');
-  bool _isDocx(String path) => path.toLowerCase().endsWith('.docx');
+  Widget _buildPdfView(String path) {
+    // Se o formato selecionado for PDF mas o arquivo for .txt ou .md,
+    // mostramos uma tela de exportação em vez de tentar abrir o PDF (que causaria erro/tela azul)
+    if (!path.toLowerCase().endsWith('.pdf')) {
+      return _buildPdfPlaceholder(path);
+    }
 
-  Widget _buildPdfView(String path) => PdfViewer.file(path);
-
-  Widget _buildDocxView(String path) {
-    return FutureBuilder<String>(
-      future: _loadDocxText(path),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(
-            child: Text(
-              'Error loading DOCX: ${snapshot.error}',
+    debugPrint('DocumentView: Building PDF view (pdfrx) for path: $path');
+    if (!File(path).existsSync()) {
+      debugPrint('DocumentView: PDF file does NOT exist at path: $path');
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, color: Colors.red, size: 48),
+            const SizedBox(height: 16),
+            Text(
+              'Arquivo PDF não encontrado:\n$path',
+              textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.red),
             ),
-          );
-        }
-        return Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: SingleChildScrollView(
-            child: Text(
-              snapshot.data ?? '',
-              style: AppTheme.codeTextStyle.copyWith(fontSize: 14),
-            ),
+          ],
+        ),
+      );
+    }
+
+    return Stack(
+      children: [
+        PdfViewer.file(
+          path,
+          controller: _pdfController,
+          params: PdfViewerParams(
+            enableTextSelection: true,
+            onDocumentChanged: (document) {
+              if (document != null) {
+                debugPrint(
+                  'DocumentView: PDF loaded successfully: ${document.pages.length} pages',
+                );
+                _currentPdfDocument = document;
+              }
+            },
+            onTextSelectionChange: (selection) {
+              debugPrint(
+                'DocumentView: PDF Selection changed: ${selection.length} ranges',
+              );
+              setState(() {
+                _pdfSelection = selection;
+              });
+            },
+            // Render highlights
+            pageOverlaysBuilder: (context, pageRect, page) {
+              return [_buildPdfHighlightsOverlay(page, pageRect)];
+            },
           ),
-        );
-      },
+        ),
+        if (_pdfSelection != null && _pdfSelection!.isNotEmpty)
+          _buildPdfSelectionToolbar(),
+      ],
     );
   }
 
-  Future<String> _loadDocxText(String path) async {
-    final bytes = await File(path).readAsBytes();
-    return docxToText(bytes);
+  Widget _buildPdfPlaceholder(String path) {
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      color: AppTheme.background,
+      child: Column(
+        children: [
+          // Elegant Header for the placeholder
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            color: AppTheme.surface,
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.picture_as_pdf,
+                  color: AppTheme.accent,
+                  size: 20,
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Visualização de PDF',
+                  style: AppTheme.uiStyle.copyWith(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.warning.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: AppTheme.warning.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.info_outline,
+                        color: AppTheme.warning,
+                        size: 14,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Modo Exportação',
+                        style: TextStyle(
+                          color: AppTheme.warning,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 600),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(40),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Dynamic Icon Container
+                      TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 0.0, end: 1.0),
+                        duration: const Duration(milliseconds: 800),
+                        curve: Curves.easeOutBack,
+                        builder: (context, value, child) {
+                          return Transform.scale(
+                            scale: value,
+                            child: Opacity(opacity: value, child: child),
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(40),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                AppTheme.accent.withValues(alpha: 0.2),
+                                AppTheme.accent.withValues(alpha: 0.05),
+                              ],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppTheme.accent.withValues(alpha: 0.1),
+                                blurRadius: 40,
+                                spreadRadius: 10,
+                              ),
+                            ],
+                          ),
+                          child: Icon(
+                            Icons.auto_awesome,
+                            color: AppTheme.accent,
+                            size: 100,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 48),
+                      Text(
+                        'Gerar Documento PDF',
+                        style: GoogleFonts.outfit(
+                          fontSize: 36,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.textPrimary,
+                          letterSpacing: -0.5,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        'O arquivo atual é um documento de texto.\nPara visualizar o resultado final com a formatação profissional, clique no botão abaixo para gerar o arquivo PDF.',
+                        style: TextStyle(
+                          fontSize: 18,
+                          color: AppTheme.textSecondary,
+                          height: 1.6,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 56),
+                      // Premium Action Button
+                      InkWell(
+                        onTap: () => widget.onSaveFile(),
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 32,
+                            vertical: 20,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.accent,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppTheme.accent.withValues(alpha: 0.3),
+                                blurRadius: 20,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.picture_as_pdf,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                              const SizedBox(width: 16),
+                              Text(
+                                'EXPORTAR PARA PDF',
+                                style: GoogleFonts.outfit(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPdfHighlightsOverlay(PdfPage page, Rect pageRect) {
+    final path = widget.tabs.isNotEmpty
+        ? widget.tabs[widget.activeTabIndex]
+        : null;
+    if (path == null) return const SizedBox.shrink();
+
+    final metadata = widget.noteMetadataMap[path];
+    if (metadata == null) return const SizedBox.shrink();
+
+    final highlights = metadata.highlights
+        .where((h) => h.type == HighlightType.pdf)
+        .toList();
+    final pageNumber = page.pageNumber;
+
+    if (highlights.isNotEmpty) {
+      debugPrint(
+        'DocumentView: Building highlights overlay for page $pageNumber. Total PDF highlights: ${highlights.length}',
+      );
+    }
+
+    // Scaling factors
+    final double scaleX = pageRect.width / page.width;
+    final double scaleY = pageRect.height / page.height;
+
+    return Stack(
+      children: highlights.expand((h) {
+        if (h.pdfRegions == null) return <Widget>[];
+
+        return h.pdfRegions!.where((r) => r.pageNumber == pageNumber).map<
+          Widget
+        >((region) {
+          // Scale the PDF coordinates to the rendered page size
+          // Fix Y-axis inversion: Flutter top = (pageHeight - pdfTop)
+          final scaledRect = Rect.fromLTWH(
+            region.bounds.left * scaleX,
+            (page.height - region.bounds.top) * scaleY,
+            region.bounds.width * scaleX,
+            region.bounds.height * scaleY,
+          );
+
+          debugPrint(
+            'DocumentView: Rendering highlight ${h.id} on page $pageNumber at $scaledRect',
+          );
+
+          return Positioned.fromRect(
+            rect: scaledRect,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                debugPrint('DocumentView: Tapped highlight ${h.id}');
+                widget.onShowNote?.call(h.id);
+              },
+              child: Container(
+                color: Color(h.colorValue).withValues(alpha: 0.4),
+              ),
+            ),
+          );
+        });
+      }).toList(),
+    );
+  }
+
+  Widget _buildPdfSelectionToolbar() {
+    return Positioned(
+      top: 50,
+      right: 20,
+      child: Material(
+        elevation: 8,
+        borderRadius: BorderRadius.circular(8),
+        color: AppTheme.surface,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: Icon(Icons.edit_note_rounded, color: AppTheme.accent),
+                onPressed: _onAddPdfNote,
+                tooltip: 'Marcar e Adicionar Nota',
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: () {
+                  setState(() {
+                    _pdfSelection = null;
+                  });
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _onAddPdfNote() {
+    debugPrint(
+      'DocumentView: _onAddPdfNote called. Selection present? ${_pdfSelection != null}. Empty? ${_pdfSelection?.isEmpty}',
+    );
+    if (_pdfSelection == null ||
+        _pdfSelection!.isEmpty ||
+        _currentPdfDocument == null) {
+      debugPrint(
+        'DocumentView: _onAddPdfNote aborted: selection or document missing',
+      );
+      return;
+    }
+
+    final selection = _pdfSelection!;
+    // Join text from multiple ranges if necessary
+    final String selectedText = selection.map((r) => r.text).join(' ');
+
+    List<PdfRegion> regions = [];
+    for (var ranges in selection) {
+      // Use the actual page number from the selection ranges
+      final int pNum = ranges.pageNumber;
+      for (var range in ranges.ranges) {
+        final dynamic r = range;
+
+        // Use fragments if available for more precise highlighting
+        bool addedFromFragments = false;
+        try {
+          if (r.fragments != null && r.fragments.isNotEmpty) {
+            for (var fragment in r.fragments) {
+              final dynamic f = fragment;
+              regions.add(
+                PdfRegion(
+                  pageNumber: pNum,
+                  bounds: Rect.fromLTWH(
+                    f.bounds.left,
+                    f.bounds.top,
+                    f.bounds.width,
+                    f.bounds.height,
+                  ),
+                ),
+              );
+            }
+            addedFromFragments = true;
+          }
+        } catch (_) {}
+
+        if (!addedFromFragments) {
+          Rect? bounds;
+          try {
+            if (r.bounds != null) {
+              bounds = Rect.fromLTWH(
+                r.bounds.left,
+                r.bounds.top,
+                r.bounds.width,
+                r.bounds.height,
+              );
+            }
+          } catch (_) {}
+
+          if (bounds != null) {
+            regions.add(PdfRegion(pageNumber: pNum, bounds: bounds));
+          }
+        }
+      }
+    }
+
+    debugPrint(
+      'DocumentView: Extracted ${regions.length} regions for selected text: "$selectedText"',
+    );
+
+    if (regions.isEmpty) {
+      debugPrint('DocumentView: _onAddPdfNote aborted: no regions found');
+      return;
+    }
+
+    final path = widget.tabs[widget.activeTabIndex];
+    final metadata = widget.noteMetadataMap[path] ?? NoteMetadata();
+
+    final newHighlight = HighlightNote(
+      id: 'pdf_h_${DateTime.now().millisecondsSinceEpoch}',
+      content: '',
+      highlightedText: selectedText,
+      colorValue: 0x80FFFF00, // Default semi-transparent yellow
+      type: HighlightType.pdf,
+      pdfRegions: regions,
+    );
+
+    final updatedHighlights = List<HighlightNote>.from(metadata.highlights)
+      ..add(newHighlight);
+    final updatedMetadata = metadata.copyWith(highlights: updatedHighlights);
+
+    debugPrint(
+      'DocumentView: Saving metadata with ${updatedHighlights.length} highlights',
+    );
+    widget.onMetadataChanged(path, updatedMetadata);
+
+    setState(() {
+      _pdfSelection = null;
+    });
+
+    widget.onShowNote?.call(newHighlight.id);
   }
 
   Widget _buildPublicationView(String path) {
@@ -630,121 +1164,372 @@ class _DocumentViewState extends State<DocumentView> {
     final archive = ZipDecoder().decodeBytes(bytes);
 
     final manifestFile = archive.findFile('manifest.json');
-    if (manifestFile == null) throw Exception('manifest.json not found');
+    if (manifestFile == null) throw Exception('manifest.json não encontrado');
     final manifest = json.decode(
       utf8.decode(manifestFile.content as List<int>),
     );
 
+    // Implementação JWPUB (Pausada em 25/04/2026)
+    // Status: Já conseguimos descobrir o banco de dados correto (ex: CA-brtk26_T_007.db)
+    // e identificar as tabelas de conteúdo (Document, DocumentParagraph, Extract).
+    // O próximo passo seria refinar a ordenação dos blocos de texto e a formatação Markdown.
+
+    // Discover the database file
+    // Discover all potential database files
+    List<ArchiveFile> potentialDbs = [];
+
+    // Look in root
+    for (var f in archive.files) {
+      if (f.name.toLowerCase().endsWith('.db') ||
+          f.name.toLowerCase() == 'contents') {
+        potentialDbs.add(f);
+      }
+    }
+
+    // Look in nested 'contents' zip if it exists
     final contentsFile = archive.findFile('contents');
-    if (contentsFile == null) throw Exception('contents file not found');
+    if (contentsFile != null) {
+      // Try to treat it as a database first
+      potentialDbs.add(contentsFile);
 
-    final contentsArchive = ZipDecoder().decodeBytes(
-      contentsFile.content as List<int>,
-    );
-    final dbFile = contentsArchive.files.firstWhere(
-      (f) => f.name.endsWith('.db'),
-    );
+      // Also try to treat it as a ZIP
+      try {
+        final bytes = contentsFile.content as List<int>;
+        final contentsArchive = ZipDecoder().decodeBytes(bytes);
+        for (var f in contentsArchive.files) {
+          if (f.name.toLowerCase().endsWith('.db')) {
+            potentialDbs.add(f);
+          }
+        }
+      } catch (_) {}
+    }
 
+    if (potentialDbs.isEmpty) {
+      throw Exception('Banco de dados (.db) não encontrado no arquivo JWPUB');
+    }
+
+    // Pick the best database
+    ArchiveFile? dbFile;
+    int maxTables = -1;
     final tempDir = await getTemporaryDirectory();
-    final dbPath = p.join(tempDir.path, dbFile.name);
-    await File(dbPath).writeAsBytes(dbFile.content as List<int>);
+    final String foundFiles = potentialDbs.map((f) => f.name).join(', ');
+    debugPrint('Potential databases found: $foundFiles');
+
+    for (var potential in potentialDbs) {
+      final pPath = p.join(
+        tempDir.path,
+        'check_db_${DateTime.now().millisecondsSinceEpoch}_${potentialDbs.indexOf(potential)}.db',
+      );
+
+      try {
+        final bytes = potential.content as List<int>;
+        await File(pPath).writeAsBytes(bytes);
+
+        final checkDb = await openDatabase(pPath, readOnly: true);
+        final tablesResult = await checkDb.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        );
+        final List<String> currentTableNames = tablesResult
+            .map((t) => t['name'] as String)
+            .toList();
+        await checkDb.close();
+
+        debugPrint(
+          'DB ${potential.name} has ${currentTableNames.length} tables: ${currentTableNames.join(", ")}',
+        );
+
+        if (currentTableNames.contains('Document')) {
+          dbFile = potential;
+          break; // Found the primary content database!
+        }
+
+        if (currentTableNames.length > maxTables) {
+          maxTables = currentTableNames.length;
+          dbFile = potential;
+        }
+      } catch (e) {
+        debugPrint(
+          'File ${potential.name} is not a valid SQLite database or bytes extraction failed: $e',
+        );
+      }
+    }
+
+    if (dbFile == null) {
+      throw Exception(
+        'Não foi possível encontrar um banco de dados válido no arquivo JWPUB',
+      );
+    }
+
+    final dbPath = p.join(
+      tempDir.path,
+      'jwpub_main_${DateTime.now().millisecondsSinceEpoch}.db',
+    );
+    final dbBytes = dbFile.content as List<int>;
+    await File(dbPath).writeAsBytes(dbBytes);
 
     final Database db = await openDatabase(dbPath, readOnly: true);
     List<Map<String, dynamic>> documents = [];
+    List<String> tableNames = [];
 
     try {
-      final docMaps = await db.query(
-        'Document',
-        columns: ['DocumentId', 'Title', 'Content'],
+      // 1. Get all tables in the database
+      final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
       );
+      tableNames = tables.map((t) => t['name'] as String).toList();
 
-      for (var docMap in docMaps) {
-        final docId = docMap['DocumentId'] as int;
-        final title = (docMap['Title'] as String?) ?? 'No Title';
-        String contentText = '';
+      // 2. Strategy A: Standard JWPUB Document Structure
+      if (tableNames.contains('Document')) {
+        final columns = await db.rawQuery('PRAGMA table_info(Document)');
+        final availableColumns = columns
+            .map((c) => c['name'].toString())
+            .toList();
 
-        try {
-          final columns = await db.rawQuery(
-            'PRAGMA table_info(DocumentParagraph)',
-          );
-          String? targetColumn;
-          for (var col in columns) {
-            final name = col['name'].toString().toLowerCase();
-            if (name == 'content' || name == 'text' || name == 'markup') {
-              targetColumn = col['name'].toString();
-              break;
+        final idCol = availableColumns.firstWhere((c) {
+          final l = c.toLowerCase();
+          return l == 'documentid' || l == 'id' || l == 'docid';
+        }, orElse: () => '');
+        final titleCol = availableColumns.firstWhere((c) {
+          final l = c.toLowerCase();
+          return l == 'title' || l == 'displaytitle' || l == 'label';
+        }, orElse: () => '');
+        final contentCol = availableColumns.firstWhere((c) {
+          final l = c.toLowerCase();
+          return l.contains('content') ||
+              l.contains('text') ||
+              l.contains('markup') ||
+              l.contains('body') ||
+              l.contains('markdown');
+        }, orElse: () => '');
+
+        if (idCol.isNotEmpty || contentCol.isNotEmpty) {
+          final List<String> queryCols = [];
+          if (idCol.isNotEmpty) queryCols.add(idCol);
+          if (titleCol.isNotEmpty) queryCols.add(titleCol);
+          if (contentCol.isNotEmpty) queryCols.add(contentCol);
+
+          final docMaps = await db.query('Document', columns: queryCols);
+
+          for (var docMap in docMaps) {
+            final docId = idCol.isNotEmpty ? docMap[idCol] : 0;
+            final title = titleCol.isNotEmpty
+                ? (docMap[titleCol]?.toString() ?? 'Untitled')
+                : 'Document $docId';
+            // Acumular conteúdo de múltiplas fontes
+            final List<String> contentParts = [];
+
+            // 1. Tenta conteúdo direto da tabela Document
+            if (contentCol.isNotEmpty) {
+              final val = docMap[contentCol];
+              String direct = '';
+              if (val is String) {
+                direct = val;
+              } else if (val is List<int>) {
+                direct = _decodeBlob(val);
+              }
+              if (direct.trim().length > 2) {
+                contentParts.add(direct);
+              }
+            }
+
+            // 2. Tenta tabelas relacionadas (DocumentParagraph, etc.)
+            if (idCol.isNotEmpty) {
+              for (var relatedTable in [
+                'DocumentParagraph',
+                'TextUnit',
+                'Block',
+                'Paragraph',
+                'Verse',
+                'BibleVerse',
+                'IndependentBlock',
+              ]) {
+                if (tableNames.contains(relatedTable)) {
+                  try {
+                    final relCols = await db.rawQuery(
+                      'PRAGMA table_info($relatedTable)',
+                    );
+                    final relColNames = relCols
+                        .map((c) => c['name'].toString())
+                        .toList();
+
+                    final relIdCol = relColNames.firstWhere((c) {
+                      final l = c.toLowerCase();
+                      return l == 'documentid' ||
+                          l == 'id' ||
+                          l == 'docid' ||
+                          l == 'blockid';
+                    }, orElse: () => '');
+
+                    final relContentCol = relColNames.firstWhere((c) {
+                      final l = c.toLowerCase();
+                      return l.contains('content') ||
+                          l.contains('text') ||
+                          l.contains('markup') ||
+                          l.contains('body') ||
+                          l.contains('verse');
+                    }, orElse: () => '');
+
+                    if (relIdCol.isNotEmpty && relContentCol.isNotEmpty) {
+                      final relMaps = await db.query(
+                        relatedTable,
+                        columns: [relContentCol],
+                        where: '$relIdCol = ?',
+                        whereArgs: [docId],
+                        orderBy: relColNames.contains('Sequence')
+                            ? 'Sequence'
+                            : null,
+                      );
+                      if (relMaps.isNotEmpty) {
+                        final relText = relMaps
+                            .map((m) {
+                              final v = m[relContentCol];
+                              if (v is List<int>) return _decodeBlob(v);
+                              return v?.toString() ?? '';
+                            })
+                            .join('\n\n');
+                        if (relText.trim().length > 5 &&
+                            !RegExp(r'^\d+$').hasMatch(relText.trim())) {
+                          contentParts.add(relText);
+                        }
+                      }
+                    }
+                  } catch (_) {}
+                }
+              }
+            }
+
+            String contentText = contentParts.join('\n\n');
+            contentText = contentText.replaceAll(RegExp(r'<[^>]*>'), '');
+            contentText = contentText
+                .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+                .trim();
+
+            if (contentText.isNotEmpty) {
+              documents.add({'Title': title, 'Content': contentText});
             }
           }
-          if (targetColumn != null) {
-            final paraMaps = await db.query(
-              'DocumentParagraph',
-              columns: [targetColumn],
-              where: 'DocumentId = ?',
-              whereArgs: [docId],
-            );
-            if (paraMaps.isNotEmpty) {
-              contentText = paraMaps
-                  .map((p) => p[targetColumn]?.toString() ?? '')
-                  .join('\n\n');
-            }
-          }
-        } catch (_) {}
+        }
+      }
 
-        if (contentText.isEmpty) {
+      // 3. Strategy B: Generic Content Search (Fallback for Bibles, Yearbooks, etc.)
+      if (documents.isEmpty) {
+        for (var table in tableNames) {
+          if ([
+            'Document',
+            'sqlite_sequence',
+            'android_metadata',
+          ].contains(table)) {
+            continue;
+          }
+
           try {
-            final unitMaps = await db.query(
-              'TextUnit',
-              columns: ['Text'],
-              where: 'DocumentId = ?',
-              whereArgs: [docId],
-            );
-            if (unitMaps.isNotEmpty) {
-              contentText = unitMaps
-                  .map((u) => u['Text']?.toString() ?? '')
-                  .join('\n\n');
+            final columns = await db.rawQuery('PRAGMA table_info($table)');
+            final colNames = columns.map((c) => c['name'].toString()).toList();
+
+            final contentCol = colNames.firstWhere((c) {
+              final lower = c.toLowerCase();
+              return lower.contains('content') ||
+                  lower.contains('text') ||
+                  lower.contains('markup') ||
+                  lower.contains('markdown') ||
+                  lower.contains('body') ||
+                  lower.contains('verse');
+            }, orElse: () => '');
+            if (contentCol.isNotEmpty) {
+              final maps = await db.query(
+                table,
+                columns: [contentCol],
+                limit: 500,
+              ); // Limit to avoid massive dump
+              if (maps.isNotEmpty) {
+                String fullText = maps
+                    .map((m) {
+                      final val = m[contentCol];
+                      if (val is List<int>) return _decodeBlob(val);
+                      return val?.toString() ?? '';
+                    })
+                    .join('\n\n');
+                fullText = fullText.replaceAll(RegExp(r'<[^>]*>'), '').trim();
+
+                // Filtro para ignorar tabelas que só contém números ou metadados curtos
+                if (fullText.length > 20 &&
+                    !RegExp(r'^\d+$').hasMatch(fullText)) {
+                  documents.add({
+                    'Title': 'Conteúdo de $table',
+                    'Content': fullText,
+                  });
+                }
+              }
             }
           } catch (_) {}
         }
-
-        if (contentText.isEmpty) {
-          final blob = docMap['Content'];
-          if (blob is List<int> && blob.isNotEmpty) {
-            contentText = _decodeBlob(blob);
-          } else if (blob is String) {
-            contentText = blob;
-          }
-        }
-
-        contentText = contentText.replaceAll(RegExp(r'<[^>]*>'), '');
-        contentText = contentText.replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
-
-        if (contentText.isNotEmpty) {
-          documents.add({'Title': title, 'Content': contentText});
-        }
       }
     } catch (e) {
-      debugPrint('Error querying Document table: $e');
+      debugPrint('Error decoding JWPUB database: $e');
     }
 
+    final String foundTables = tableNames.join(', ');
     await db.close();
-    if (documents.isEmpty) throw Exception('Could not find any readable text.');
+
+    if (documents.isEmpty) {
+      throw Exception(
+        'Não foi possível encontrar texto legível no arquivo. Tabelas encontradas: $foundTables',
+      );
+    }
     return {'manifest': manifest, 'documents': documents};
   }
 
+  NoteMetadata _getEffectiveMetadata(String path) {
+    final meta = widget.noteMetadataMap[path] ?? NoteMetadata();
+    if (meta.title.isEmpty) {
+      String name = p.basenameWithoutExtension(path);
+      // Optional: capitalize first letter or handle 'Untitled'
+      return meta.copyWith(title: name);
+    }
+    return meta;
+  }
+
   String _decodeBlob(List<int> blob) {
+    if (blob.isEmpty) return '';
+
+    // 1. Tentar ZLib (Padrão mais comum nas publicações da JW)
     try {
-      return utf8.decode(ZLibDecoder().decodeBytes(blob));
+      final decoded = ZLibDecoder().decodeBytes(blob);
+      return utf8.decode(decoded, allowMalformed: true);
     } catch (_) {}
+
+    // 2. Tentar GZip
     try {
-      return utf8.decode(GZipDecoder().decodeBytes(blob));
+      final decoded = GZipDecoder().decodeBytes(blob);
+      return utf8.decode(decoded, allowMalformed: true);
     } catch (_) {}
+
+    // 3. Tentar Inflate direto
     try {
-      return utf8.decode(Inflate(blob).getBytes());
+      final decoded = Inflate(blob).getBytes();
+      return utf8.decode(decoded, allowMalformed: true);
     } catch (_) {}
+
+    // 4. Tentar UTF-8 puro (muitas vezes o texto está direto no BLOB)
     try {
-      return utf8.decode(blob);
+      return utf8.decode(blob, allowMalformed: true);
     } catch (_) {}
-    return '[Binary Content: ${blob.length} bytes]';
+
+    // 5. Brute Force: Extrair apenas caracteres imprimíveis
+    // Útil para extrair fragmentos de texto de estruturas binárias (como Protobuf)
+    try {
+      final printable = blob
+          .where(
+            (b) => (b >= 32 && b <= 126) || b == 10 || b == 13 || (b >= 160),
+          )
+          .toList();
+      if (printable.length > blob.length * 0.3) {
+        // Se pelo menos 30% parecer texto
+        return utf8.decode(printable, allowMalformed: true);
+      }
+    } catch (_) {}
+
+    return '[Conteúdo Binário: ${blob.length} bytes]';
   }
 
   // ─── MARKDOWN EDITOR ─────────────────────────────────────────────────────
@@ -756,13 +1541,12 @@ class _DocumentViewState extends State<DocumentView> {
 
     // Modern style for AppFlowy v6.2.0
     final editorStyle = EditorStyle.desktop(
-      padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       cursorColor: AppTheme.accent,
       selectionColor: AppTheme.accent.withValues(alpha: 0.3),
       textStyleConfiguration: TextStyleConfiguration(
         text: AppTheme.codeTextStyle.copyWith(
-          fontSize:
-              16, // Tamanho base fixo para Markdown. Alterações via toolbar serão por seleção.
+          fontSize: widget.textStyleController.fontSize,
           height: 1.5,
           color: AppTheme.textPrimary,
           fontWeight: FontWeight.normal,
@@ -783,12 +1567,56 @@ class _DocumentViewState extends State<DocumentView> {
         ),
         lineHeight: 1.5,
       ),
+      textSpanDecorator: (context, node, index, insert, original, current) {
+        final attributes = insert.attributes;
+        TextSpan result = current;
+
+        // Apply custom font size if present
+        if (attributes != null && attributes.containsKey('font_size')) {
+          final size = (attributes['font_size'] as num).toDouble();
+          result = TextSpan(
+            children: [result],
+            style: TextStyle(fontSize: size),
+          );
+        }
+
+        if (attributes != null && attributes.containsKey('note')) {
+          final highlightId = attributes['note'] as String;
+          final path =
+              widget.tabs.isNotEmpty ? widget.tabs[widget.activeTabIndex] : '';
+          final metadata = widget.noteMetadataMap[path];
+
+          if (metadata != null) {
+            final highlight =
+                metadata.highlights.where((h) => h.id == highlightId).firstOrNull;
+            if (highlight != null) {
+              final color = Color(highlight.colorValue);
+              return TextSpan(
+                children: [result],
+                style: TextStyle(backgroundColor: color.withValues(alpha: 0.5)),
+                recognizer: TapGestureRecognizer()
+                  ..onTap = () {
+                    widget.onShowNote?.call(highlightId);
+                  },
+              );
+            }
+          }
+
+          return TextSpan(
+            children: [result],
+            style: TextStyle(
+              backgroundColor: const Color(0xFFFBC02D).withValues(alpha: 0.5),
+            ),
+          );
+        }
+        return result;
+      },
     );
 
     final path = widget.tabs.isNotEmpty
         ? widget.tabs[widget.activeTabIndex]
         : '';
-    final metadata = widget.noteMetadataMap[path] ?? NoteMetadata();
+    final metadata = _getEffectiveMetadata(path);
 
     // Custom Enter key behavior:
     // - Enter: insert soft newline (\n) in the same block with auto-indent
@@ -872,36 +1700,147 @@ class _DocumentViewState extends State<DocumentView> {
       getDescription: () => 'Insert tab or spaces',
     );
 
-    return AppFlowyEditor(
-      editorState: _editorState!,
-      editorStyle: editorStyle,
-      autoFocus: false,
-      editable: true,
-      header: _buildNoteHeader(path, metadata),
-      characterShortcutEvents: [
-        customInsertNewLine,
-        ...standardCharacterShortcutEvents.where((e) => e.character != '\n'),
-      ],
-      commandShortcutEvents: [
-        customTabCommand,
-        ...standardCommandShortcutEvents.where((e) => e.key != 'indent'),
-      ],
-      blockComponentBuilders: {
-        ...standardBlockComponentBuilderMap,
-        'divider': CustomHorizontalRuleBuilder(
-          speechController: widget.speechController,
-          editorState: _editorState!,
-          onShowSpeechSummary: widget.onShowSpeechSummary,
-        ),
+    return GestureDetector(
+      onSecondaryTapDown: (details) {
+        _showEditorContextMenu(context, details.globalPosition);
       },
+      child: AppFlowyEditor(
+        editorState: _editorState!,
+        editorStyle: editorStyle,
+        autoFocus: false,
+        editable: true,
+        header: _buildNoteHeader(path, metadata),
+        characterShortcutEvents: [
+          customInsertNewLine,
+          ...standardCharacterShortcutEvents.where((e) => e.character != '\n'),
+        ],
+        commandShortcutEvents: [
+          customTabCommand,
+          ...standardCommandShortcutEvents.where((e) => e.key != 'indent'),
+        ],
+        blockComponentBuilders: {
+          ...standardBlockComponentBuilderMap,
+          'divider': CustomHorizontalRuleBuilder(
+            speechController: widget.speechController,
+            editorState: _editorState!,
+            onShowSpeechSummary: widget.onShowSpeechSummary,
+          ),
+          'finalize_timer': FinalizeTimerBuilder(
+            speechController: widget.speechController,
+            editorState: _editorState!,
+          ),
+        },
+      ),
     );
+  }
+
+  void _showEditorContextMenu(BuildContext context, Offset position) async {
+    final activeTab = widget.tabs.isNotEmpty ? widget.tabs[widget.activeTabIndex] : null;
+    
+    // Capture selection before focus is lost to the popup menu
+    final selection = _editorState?.selection;
+
+    final result = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        position.dx,
+        position.dy,
+      ),
+      color: AppTheme.sidebarBackground,
+      elevation: 8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      items: [
+        PopupMenuItem(
+          value: 'copy',
+          child: Row(
+            children: [
+              Icon(Icons.copy, size: 18, color: AppTheme.textPrimary),
+              const SizedBox(width: 12),
+              Text('Copiar', style: TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'cut',
+          child: Row(
+            children: [
+              Icon(Icons.cut, size: 18, color: AppTheme.textPrimary),
+              const SizedBox(width: 12),
+              Text('Recortar', style: TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'paste',
+          child: Row(
+            children: [
+              Icon(Icons.paste, size: 18, color: AppTheme.textPrimary),
+              const SizedBox(width: 12),
+              Text('Colar', style: TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'divider',
+          child: Row(
+            children: [
+              Icon(Icons.more_horiz, size: 18, color: AppTheme.textPrimary),
+              const SizedBox(width: 12),
+              Text('Divisor de Tempo', style: TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'finalize',
+          child: Row(
+            children: [
+              Icon(Icons.stop_circle_outlined, size: 18, color: AppTheme.error),
+              const SizedBox(width: 12),
+              Text('Botão Finalizar Tempo', style: TextStyle(color: AppTheme.error, fontSize: 13)),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (result == null) return;
+
+    // Restore selection if it was lost
+    if (selection != null) {
+      _editorState?.updateSelectionWithReason(selection);
+    }
+
+    switch (result) {
+      case 'copy':
+        copyCommand.handler(_editorState!);
+        break;
+      case 'cut':
+        cutCommand.handler(_editorState!);
+        break;
+      case 'paste':
+        pasteCommand.handler(_editorState!);
+        break;
+      case 'rename':
+        if (activeTab != null) {
+          widget.onRename?.call(activeTab, activeTab.split('/').last);
+        }
+        break;
+      case 'divider':
+        widget.textStyleController.onInsertDivider?.call();
+        break;
+      case 'finalize':
+        _insertFinalizeTimer();
+        break;
+    }
   }
 
   // ─── NOTE HEADER (title + description) ────────────────────────────────────
 
   Widget _buildNoteHeader(String path, NoteMetadata metadata) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(48, 32, 48, 0),
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -957,12 +1896,12 @@ class _DocumentViewState extends State<DocumentView> {
             ),
             maxLines: null,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
           Divider(
             height: 1,
             color: AppTheme.textSecondary.withValues(alpha: 0.1),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
         ],
       ),
     );
@@ -972,7 +1911,7 @@ class _DocumentViewState extends State<DocumentView> {
 
   Widget _buildPlainTextEditor() {
     return Padding(
-      padding: const EdgeInsets.only(left: 24, right: 24, top: 16),
+      padding: const EdgeInsets.only(left: 16, right: 16, top: 8),
       child: Focus(
         onKeyEvent: (node, event) {
           if (event is KeyDownEvent) {
@@ -1015,6 +1954,36 @@ class _DocumentViewState extends State<DocumentView> {
           ),
           keyboardType: TextInputType.multiline,
           textAlignVertical: TextAlignVertical.top,
+          contextMenuBuilder: (context, editableTextState) {
+            return AdaptiveTextSelectionToolbar.buttonItems(
+              anchors: editableTextState.contextMenuAnchors,
+              buttonItems: [
+                ...editableTextState.contextMenuButtonItems,
+                ContextMenuButtonItem(
+                  label: 'Divisor de Tempo',
+                  onPressed: () {
+                    widget.textStyleController.onInsertDivider?.call();
+                    editableTextState.hideToolbar();
+                  },
+                ),
+                ContextMenuButtonItem(
+                  label: 'Botão Finalizar',
+                  onPressed: () {
+                    // Para texto puro, inserimos apenas o marcador markdown
+                    final text = _plainTextController.text;
+                    final selection = _plainTextController.selection;
+                    final newText = text.replaceRange(
+                      selection.start,
+                      selection.end,
+                      '\n\n[finalize_timer]\n\n',
+                    );
+                    _plainTextController.text = newText;
+                    editableTextState.hideToolbar();
+                  },
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -1024,6 +1993,17 @@ class _DocumentViewState extends State<DocumentView> {
 
   @override
   Widget build(BuildContext context) {
+    final activeTab = widget.tabs.isNotEmpty
+        ? widget.tabs[widget.activeTabIndex]
+        : null;
+    final format =
+        widget.currentFormat ??
+        (activeTab != null ? EditFormat.fromPath(activeTab) : EditFormat.txt);
+
+    debugPrint(
+      'DocumentView: build. activeTab=$activeTab, format=$format, isMarkdown=${_isMarkdown(activeTab ?? "")}',
+    );
+
     return Container(
       color: AppTheme.background,
       child: Column(
@@ -1033,13 +2013,13 @@ class _DocumentViewState extends State<DocumentView> {
           Expanded(
             child: widget.tabs.isEmpty
                 ? _buildEmptyState()
-                : _isJwPub(widget.tabs[widget.activeTabIndex])
+                : format == EditFormat.jwpub
                 ? _buildPublicationView(widget.tabs[widget.activeTabIndex])
-                : _isPdf(widget.tabs[widget.activeTabIndex])
+                : format == EditFormat.pdf
                 ? _buildPdfView(widget.tabs[widget.activeTabIndex])
-                : _isDocx(widget.tabs[widget.activeTabIndex])
-                ? _buildDocxView(widget.tabs[widget.activeTabIndex])
-                : _isMarkdown
+                : format == EditFormat.docx
+                ? _buildMarkdownEditor()
+                : format == EditFormat.markdown
                 ? _buildMarkdownEditor()
                 : _buildPlainTextEditor(),
           ),
@@ -1053,81 +2033,74 @@ class _DocumentViewState extends State<DocumentView> {
       color: AppTheme.background,
       child: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(32),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 64),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Logo/Hero Icon
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: AppTheme.accent.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.edit_note_rounded,
-                  size: 80,
-                  color: AppTheme.accent,
-                ),
-              ),
-              const SizedBox(height: 32),
-
               // Welcome Text
               Text(
-                'Outline Hub',
+                'Nenhum arquivo aberto',
                 style: TextStyle(
                   color: AppTheme.textPrimary,
-                  fontSize: 32,
+                  fontSize: 28,
                   fontWeight: FontWeight.bold,
-                  letterSpacing: -0.5,
+                  letterSpacing: -1.5,
                 ),
               ),
               const SizedBox(height: 8),
               Text(
-                'Organize suas ideias e anotações com simplicidade.',
+                'Abra um arquivo para começar a editar.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 16),
+                style: TextStyle(
+                  color: AppTheme.textSecondary.withValues(alpha: 0.6),
+                  fontSize: 20,
+                  fontWeight: FontWeight.w300,
+                  letterSpacing: -0.5,
+                ),
               ),
-              const SizedBox(height: 48),
+              const SizedBox(height: 80),
 
-              // Action Grid/Wrap
+              // Action List
               ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 600),
-                child: Wrap(
-                  spacing: 20,
-                  runSpacing: 20,
-                  alignment: WrapAlignment.center,
+                constraints: const BoxConstraints(maxWidth: 450),
+                child: Column(
                   children: [
                     _buildWelcomeActionCard(
-                      icon: Icons.add_rounded,
-                      title: 'Nova Anotação',
-                      description: 'Comece a escrever uma nota do zero',
+                      icon: Icons.note_add_rounded,
+                      title: 'Novo Arquivo',
+                      description: 'Criar um novo arquivo vazio.',
                       onTap: widget.onNewTab,
+                      iconColor: Colors.green,
                     ),
+                    const SizedBox(height: 12),
                     _buildWelcomeActionCard(
-                      icon: Icons.file_open_rounded,
+                      icon: Icons.folder_rounded,
                       title: 'Abrir Arquivo',
-                      description: 'Carregue um arquivo .md ou .txt existente',
+                      description: 'Abrir um arquivo salvo.',
                       onTap: widget.onOpenFile,
+                      iconColor: Colors.orange.shade300,
                     ),
+                    const SizedBox(height: 12),
                     _buildWelcomeActionCard(
-                      icon: Icons.folder_open_rounded,
+                      icon: Icons.create_new_folder_rounded,
                       title: 'Abrir Pasta',
-                      description: 'Selecione um diretório para trabalhar',
+                      description:
+                          'Adicionar uma pasta de projeto à barra lateral.',
                       onTap: widget.onOpenFolder,
+                      iconColor: Colors.purple.shade300,
                     ),
                   ],
                 ),
               ),
 
-              const SizedBox(height: 64),
+              const SizedBox(height: 96),
 
               // Tips or Footer
               Text(
-                'Dica: Use a barra superior para alternar entre Markdown e Texto Simples',
+                'Dica: Use a barra superior para alternar entre Markdown, Texto Simples, PDF e DOCX',
                 style: TextStyle(
-                  color: AppTheme.textSecondary.withValues(alpha: 0.4),
-                  fontSize: 12,
+                  color: AppTheme.textSecondary.withValues(alpha: 0.3),
+                  fontSize: 13,
                 ),
               ),
             ],
@@ -1142,41 +2115,92 @@ class _DocumentViewState extends State<DocumentView> {
     required String title,
     required String description,
     required VoidCallback onTap,
+    Color? iconColor,
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 170,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: AppTheme.textSecondary.withValues(alpha: 0.1),
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 32, color: AppTheme.accent),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              description,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
-            ),
-          ],
+      borderRadius: BorderRadius.circular(16),
+      hoverColor: AppTheme.textSecondary.withValues(alpha: 0.05),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isNarrow = constraints.maxWidth < 280;
+            return Flex(
+              direction: isNarrow ? Axis.vertical : Axis.horizontal,
+              crossAxisAlignment: isNarrow
+                  ? CrossAxisAlignment.start
+                  : CrossAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: (iconColor ?? AppTheme.accent).withValues(
+                      alpha: 0.1,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    icon,
+                    size: 36,
+                    color: iconColor ?? AppTheme.accent,
+                  ),
+                ),
+                SizedBox(width: isNarrow ? 0 : 24, height: isNarrow ? 12 : 0),
+                isNarrow
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            title,
+                            style: TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 20,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            description,
+                            style: TextStyle(
+                              color: AppTheme.textSecondary.withValues(
+                                alpha: 0.7,
+                              ),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              title,
+                              style: TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 20,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              description,
+                              style: TextStyle(
+                                color: AppTheme.textSecondary.withValues(
+                                  alpha: 0.7,
+                                ),
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -1186,98 +2210,108 @@ class _DocumentViewState extends State<DocumentView> {
     return Container(
       height: 36,
       color: AppTheme.surface,
-      child: Row(
-        children: [
-          Expanded(
-            child: Theme(
-              data: Theme.of(context).copyWith(
-                canvasColor: Colors.transparent,
-                shadowColor: Colors.transparent,
-              ),
-              child: ReorderableListView(
-                scrollDirection: Axis.horizontal,
-                onReorder: widget.onReorderTab,
-                buildDefaultDragHandles: false,
-                proxyDecorator: (child, index, animation) =>
-                    Material(color: Colors.transparent, child: child),
-                children: List.generate(widget.tabs.length, (index) {
-                  final isSelected = widget.activeTabIndex == index;
-                  final path = widget.tabs[index];
-                  final filename = path.split('/').last;
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Row(
+            children: [
+              Expanded(
+                child: Theme(
+                  data: Theme.of(context).copyWith(
+                    canvasColor: Colors.transparent,
+                    shadowColor: Colors.transparent,
+                  ),
+                  child: ReorderableListView(
+                    scrollDirection: Axis.horizontal,
+                    onReorder: widget.onReorderTab,
+                    buildDefaultDragHandles: false,
+                    proxyDecorator: (child, index, animation) =>
+                        Material(color: Colors.transparent, child: child),
+                    children: List.generate(widget.tabs.length, (index) {
+                      final isSelected = widget.activeTabIndex == index;
+                      final path = widget.tabs[index];
+                      final filename = path.split('/').last;
 
-                  return ReorderableDragStartListener(
-                    key: ValueKey(path),
-                    index: index,
-                    child: InkWell(
-                      onTap: () => widget.onSelectTab(index),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? AppTheme.background
-                              : Colors.transparent,
-                          border: isSelected
-                              ? Border(
-                                  bottom: BorderSide(
-                                    color: AppTheme.accent,
-                                    width: 2,
-                                  ),
-                                )
-                              : null,
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              _getFileIcon(filename),
-                              size: 14,
+                      return ReorderableDragStartListener(
+                        key: ValueKey(path),
+                        index: index,
+                        child: InkWell(
+                          onTap: () => widget.onSelectTab(index),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            decoration: BoxDecoration(
                               color: isSelected
-                                  ? AppTheme.accent
-                                  : AppTheme.textSecondary,
+                                  ? AppTheme.background
+                                  : Colors.transparent,
+                              border: isSelected
+                                  ? Border(
+                                      bottom: BorderSide(
+                                        color: AppTheme.accent,
+                                        width: 2,
+                                      ),
+                                    )
+                                  : null,
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              filename,
-                              style: TextStyle(
-                                color: isSelected
-                                    ? AppTheme.textPrimary
-                                    : AppTheme.textSecondary,
-                                fontSize: 13,
-                                fontWeight: isSelected
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Tooltip(
-                              message: 'Fechar Aba',
-                              child: InkWell(
-                                onTap: () => widget.onCloseTab(index),
-                                child: Icon(
-                                  Icons.close,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  _getFileIcon(filename),
                                   size: 14,
-                                  color: AppTheme.textSecondary,
+                                  color: isSelected
+                                      ? AppTheme.accent
+                                      : AppTheme.textSecondary,
                                 ),
-                              ),
+                                const SizedBox(width: 8),
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 200),
+                                  child: Text(
+                                    filename,
+                                    style: TextStyle(
+                                      color: isSelected
+                                          ? AppTheme.textPrimary
+                                          : AppTheme.textSecondary,
+                                      fontSize: 13,
+                                      fontWeight: isSelected
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Tooltip(
+                                  message: 'Fechar Aba',
+                                  child: InkWell(
+                                    onTap: () => widget.onCloseTab(index),
+                                    child: Icon(
+                                      Icons.close,
+                                      size: 14,
+                                      color: AppTheme.textSecondary,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
-                      ),
-                    ),
-                  );
-                }),
+                      );
+                    }),
+                  ),
+                ),
               ),
-            ),
-          ),
-          GestureDetector(
-            onTap: widget.onNewTab,
-            child: Container(
-              width: 36,
-              height: 36,
-              alignment: Alignment.center,
-              child: const Icon(Icons.add, size: 18),
-            ),
-          ),
-        ],
+              if (constraints.maxWidth >= 36)
+                GestureDetector(
+                  onTap: widget.onNewTab,
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.add, size: 18),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1359,6 +2393,27 @@ class _DocumentViewState extends State<DocumentView> {
 
     widget.onSectionsChanged!(sections);
   }
+
+  void _insertFinalizeTimer() {
+    if (_editorState != null) {
+      final selection = _editorState!.selection;
+      if (selection != null) {
+        final transaction = _editorState!.transaction;
+        transaction.insertNodes(selection.end.path.next, [
+          Node(type: 'finalize_timer', attributes: {}),
+          Node(type: 'paragraph', attributes: {'delta': []}),
+        ]);
+        _editorState!.apply(transaction);
+      }
+    }
+  }
+}
+
+String _formatDuration(Duration d) {
+  String twoDigits(int n) => n.toString().padLeft(2, '0');
+  final minutes = twoDigits(d.inMinutes.remainder(60));
+  final seconds = twoDigits(d.inSeconds.remainder(60));
+  return "$minutes:$seconds";
 }
 
 class CustomHorizontalRuleBuilder extends BlockComponentBuilder {
@@ -1389,11 +2444,13 @@ class CustomHorizontalRuleBuilder extends BlockComponentBuilder {
       speechController: speechController,
       sectionIndex: dividerIndex,
       onShowSpeechSummary: onShowSpeechSummary,
+      editorState: editorState,
     );
   }
 
   @override
-  BlockComponentValidate get validate => (node) => node.type == 'divider';
+  BlockComponentValidate get validate =>
+      (node) => node.type == 'divider';
 }
 
 class CustomHorizontalRule extends StatelessWidget
@@ -1402,6 +2459,7 @@ class CustomHorizontalRule extends StatelessWidget
   final SpeechController? speechController;
   final int sectionIndex;
   final VoidCallback? onShowSpeechSummary;
+  final EditorState editorState;
 
   const CustomHorizontalRule({
     super.key,
@@ -1409,6 +2467,7 @@ class CustomHorizontalRule extends StatelessWidget
     this.speechController,
     required this.sectionIndex,
     this.onShowSpeechSummary,
+    required this.editorState,
   });
 
   @override
@@ -1442,13 +2501,17 @@ class CustomHorizontalRule extends StatelessWidget
         if (isCurrent && sectionIndex < speechController!.sections.length) {
           final section = speechController!.sections[sectionIndex];
           if (section.adjustedTargetDuration != Duration.zero) {
-            progress = section.elapsedDuration.inSeconds /
+            progress =
+                section.elapsedDuration.inSeconds /
                 section.adjustedTargetDuration.inSeconds;
           }
         }
 
-        return Container(
-          margin: const EdgeInsets.symmetric(vertical: 8),
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 8),
           child: Column(
             children: [
               if (isCurrent || isFinished)
@@ -1474,22 +2537,30 @@ class CustomHorizontalRule extends StatelessWidget
                             final newDuration = await DurationPickerDialog.show(
                               context,
                               initialDuration: speechController!
-                                  .sections[sectionIndex].targetDuration,
+                                  .sections[sectionIndex]
+                                  .targetDuration,
                               title: 'Meta da Seção',
                             );
                             if (newDuration != null) {
                               speechController!.updateTargetDuration(
-                                  sectionIndex, newDuration);
+                                sectionIndex,
+                                newDuration,
+                              );
                             }
                           },
                           borderRadius: BorderRadius.circular(4),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
                             child: Row(
                               children: [
-                                const Icon(Icons.edit_calendar_rounded,
-                                    size: 12, color: AppTheme.accent),
+                                const Icon(
+                                  Icons.edit_calendar_rounded,
+                                  size: 12,
+                                  color: AppTheme.accent,
+                                ),
                                 const SizedBox(width: 4),
                                 Text(
                                   '${_formatDuration(speechController!.sections[sectionIndex].elapsedDuration)} / ${_formatDuration(speechController!.sections[sectionIndex].adjustedTargetDuration)}',
@@ -1522,8 +2593,8 @@ class CustomHorizontalRule extends StatelessWidget
                       color: isFinished
                           ? AppTheme.accent.withValues(alpha: 0.3)
                           : (isCurrent
-                              ? AppTheme.accent.withValues(alpha: 0.3)
-                              : AppTheme.border),
+                                ? AppTheme.accent.withValues(alpha: 0.3)
+                                : AppTheme.border),
                     ),
 
                     // Barra de progresso (somente se for a seção atual)
@@ -1545,7 +2616,9 @@ class CustomHorizontalRule extends StatelessWidget
                       ),
 
                     // Botão de ação
-                    if (isCurrent || isFinished || speechController!.isSessionFinished)
+                    if (isCurrent ||
+                        isFinished ||
+                        speechController!.isSessionFinished)
                       Positioned(
                         right: 0,
                         child: GestureDetector(
@@ -1562,7 +2635,9 @@ class CustomHorizontalRule extends StatelessWidget
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 6),
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
                             decoration: BoxDecoration(
                               color: speechController!.isSessionFinished
                                   ? Colors.amber.shade700
@@ -1582,7 +2657,9 @@ class CustomHorizontalRule extends StatelessWidget
                                 Icon(
                                   speechController!.isSessionFinished
                                       ? Icons.assessment_rounded
-                                      : (isFinished ? Icons.check : Icons.skip_next),
+                                      : (isFinished
+                                            ? Icons.check
+                                            : Icons.skip_next),
                                   size: 16,
                                   color: Colors.white,
                                 ),
@@ -1607,15 +2684,109 @@ class CustomHorizontalRule extends StatelessWidget
               ),
             ],
           ),
-        );
+        ),
+            ],
+          );
       },
     );
   }
+}
 
-  String _formatDuration(Duration d) {
-    String twoDigits(int n) => n.toString().padLeft(2, '0');
-    final minutes = twoDigits(d.inMinutes.remainder(60));
-    final seconds = twoDigits(d.inSeconds.remainder(60));
-    return "$minutes:$seconds";
+class FinalizeTimerBuilder extends BlockComponentBuilder {
+  final SpeechController? speechController;
+  final EditorState editorState;
+
+  FinalizeTimerBuilder({this.speechController, required this.editorState});
+
+  @override
+  BlockComponentWidget build(BlockComponentContext blockContext) {
+    return FinalizeTimerWidget(
+      key: blockContext.node.key,
+      node: blockContext.node,
+      speechController: speechController,
+      editorState: editorState,
+    );
+  }
+
+  @override
+  BlockComponentValidate get validate => (node) => node.type == 'finalize_timer';
+}
+
+class FinalizeTimerWidget extends StatelessWidget implements BlockComponentWidget {
+  @override
+  final Node node;
+  final SpeechController? speechController;
+  final EditorState editorState;
+
+  const FinalizeTimerWidget({
+    super.key,
+    required this.node,
+    this.speechController,
+    required this.editorState,
+  });
+
+  @override
+  bool get showActions => false;
+  @override
+  BlockComponentActionBuilder? get actionBuilder => null;
+  @override
+  BlockComponentActionTrailingBuilder? get actionTrailingBuilder => null;
+  @override
+  BlockComponentConfiguration get configuration => BlockComponentConfiguration(
+        padding: (node) => EdgeInsets.zero,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    if (speechController == null) return const SizedBox.shrink();
+
+    return ListenableBuilder(
+      listenable: speechController!,
+      builder: (context, _) {
+        final isFinished = speechController!.isSessionFinished;
+        return Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24.0),
+              child: Center(
+            child: Container(
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                color: isFinished ? Colors.grey.withValues(alpha: 0.1) : AppTheme.error.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(40),
+                border: Border.all(
+                  color: isFinished ? Colors.grey : AppTheme.error,
+                  width: 2,
+                ),
+              ),
+              child: ElevatedButton.icon(
+                onPressed: isFinished ? null : () => speechController!.finishSession(),
+                icon: Icon(
+                  isFinished ? Icons.check_circle : Icons.stop_circle_outlined,
+                  size: 28,
+                ),
+                label: Text(
+                  isFinished ? 'SESSÃO FINALIZADA' : 'FINALIZAR PALESTRA',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isFinished ? Colors.grey : AppTheme.error,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(38)),
+                ),
+              ),
+            ),
+          ),
+        ),
+          ],
+        );
+      },
+    );
   }
 }

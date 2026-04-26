@@ -24,6 +24,9 @@ class SpeechController extends ChangeNotifier {
   Timer? _timer;
   int _currentSectionIndex = 0;
   bool _isSessionFinished = false;
+
+  final StreamController<int> _deleteSectionController = StreamController<int>.broadcast();
+  Stream<int> get onDeleteSection => _deleteSectionController.stream;
   
   // Stopwatch state
   Duration _totalElapsed = Duration.zero;
@@ -111,6 +114,19 @@ class SpeechController extends ChangeNotifier {
   void resetTimer() {
     pauseTimer();
     _totalElapsed = Duration.zero;
+    _totalSpeechTarget = Duration.zero;
+    for (var section in _sections) {
+      section.elapsedDuration = Duration.zero;
+      section.targetDuration = Duration.zero;
+    }
+    _currentSectionIndex = 0;
+    _isSessionFinished = false;
+    _recalculateAdjustedTargets();
+    notifyListeners();
+  }
+
+  void restartSessions() {
+    _totalElapsed = Duration.zero;
     for (var section in _sections) {
       section.elapsedDuration = Duration.zero;
     }
@@ -156,9 +172,14 @@ class SpeechController extends ChangeNotifier {
     }
   }
 
+  void requestDeleteSection(int index) {
+    _deleteSectionController.add(index);
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
+    _deleteSectionController.close();
     super.dispose();
   }
 }

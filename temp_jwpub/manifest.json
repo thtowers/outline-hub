@@ -1,0 +1,62 @@
+{
+	"name": "S-123-26_T.jwpub",
+	"hash": "cc95cbc1ea905f351b695530f2ac9681b4524716c1d69209175e7d0a482a2671",
+	"timestamp": "2025-12-17T15:17:57Z",
+	"version": 1,
+	"expandedSize": 1534414,
+	"contentFormat": "z-a",
+	"htmlValidated": false,
+	"mepsPlatformVersion": 2.100000,
+	"mepsBuildNumber": 13760,
+	"publication": { 
+		"fileName": "S-123-26_T.db",
+		"type": 1,
+		"title": "Discurso Especial de 2026",
+		"shortTitle": "Discurso Especial de 2026",
+		"displayTitle": "S-123-26 Discurso Especial de 2026",
+		"referenceTitle": "Discurso Especial de 2026",
+		"undatedReferenceTitle": "Discurso Especial de 2026",
+		"titleRich": "Discurso Especial de 2026",
+		"displayTitleRich": "S-123-26 Discurso Especial de 2026",
+		"referenceTitleRich": "Discurso Especial de 2026",
+		"undatedReferenceTitleRich": "Discurso Especial de 2026",
+		"symbol": "S-123-26",
+		"uniqueEnglishSymbol": "S-123-26",
+		"uniqueSymbol": "S-123-26",
+		"undatedSymbol": "S-123-26",
+		"englishSymbol": "S-123-26",
+		"language": 5,
+		"hash": "dbeee8343be0ba27ed6e9b59b42191d9d79197d9",
+		"timestamp": "2025-12-17T15:17:57Z",
+		"minPlatformVersion": 1,
+		"schemaVersion": 9,
+		"year": 2025,
+		"issueId": 0,
+		"issueNumber": 0,
+		"variation": "",
+		"publicationType": "Talk",
+		"rootSymbol": "S-123-26",
+		"rootYear": 2025,
+		"rootLanguage": 0,
+		"images": [ 
+		],
+		"categories": [ 
+				"talk"
+		],
+		"attributes": [ 
+				"Congregation"
+		],
+		"issueAttributes": [ 
+		],
+		"issueProperties": { 
+				"title": "",
+				"undatedTitle": "",
+				"coverTitle": "",
+				"titleRich": "",
+				"undatedTitleRich": "",
+				"coverTitleRich": "",
+				"symbol": "",
+				"undatedSymbol": ""
+		}
+	}
+}

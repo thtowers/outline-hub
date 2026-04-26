@@ -15,6 +15,7 @@ class TextStyleController extends ChangeNotifier {
   VoidCallback? onToggleBold;
   VoidCallback? onToggleItalic;
   VoidCallback? onInsertDivider;
+  VoidCallback? onToggleNote;
 
   // Update controller state from editor selection
   void updateFromSelection(double size, bool bold, bool italic) {
@@ -72,6 +73,13 @@ class TextStyleController extends ChangeNotifier {
   void insertDivider() {
     if (onInsertDivider != null) {
       onInsertDivider!();
+    }
+  }
+
+  void toggleNote() {
+    notifyListeners();
+    if (onToggleNote != null) {
+      onToggleNote!();
     }
   }
 }

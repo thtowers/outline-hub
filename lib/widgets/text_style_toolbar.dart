@@ -76,6 +76,15 @@ class TextStyleToolbar extends StatelessWidget {
                 },
                 tooltip: 'Inserir Linha Separadora',
               ),
+              const SizedBox(width: 4),
+              _buildActionButton(
+                icon: Icons.edit_note_rounded,
+                onPressed: () {
+                  debugPrint('TextStyleToolbar: Clicked Note');
+                  controller.toggleNote();
+                },
+                tooltip: 'Adicionar Nota/Destaque',
+              ),
             ],
           );
         },
