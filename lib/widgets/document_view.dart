@@ -19,6 +19,7 @@ import 'package:flutter/gestures.dart';
 import '../models/highlight_note.dart';
 import 'duration_picker_dialog.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/content_processor.dart';
 
 class DocumentView extends StatefulWidget {
   final List<String> tabs;
@@ -251,6 +252,116 @@ class _DocumentViewState extends State<DocumentView> {
     };
     ctrl.onToggleNote = _onToggleNote;
   }
+
+  Future<void> _handlePaste(EditorState editorState) async {
+    // 1. Tentar obter HTML da área de transferência (Windows)
+    String? html;
+    if (Platform.isWindows) {
+      try {
+        final result = await Process.run('powershell', [
+          '-NoProfile',
+          '-Command',
+          'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Html)'
+        ]);
+        if (result.exitCode == 0 && result.stdout is String) {
+          final output = result.stdout as String;
+          if (output.contains('StartFragment')) {
+            html = output;
+          }
+        }
+      } catch (e) {
+        debugPrint('Erro ao obter HTML do clipboard via PowerShell: $e');
+      }
+    }
+
+    if (html != null && html.isNotEmpty) {
+      // 2. Converter HTML para Markdown
+      final markdown = ContentProcessor.processHtmlFragment(html);
+      if (markdown.isNotEmpty) {
+        // 3. Converter Markdown para Document
+        final doc = markdownToDocument(markdown);
+        
+        // AUTO-FORMATAÇÃO: Converter espaços colados em indentação de bloco
+        _autoFormatDocumentIndentation(doc);
+        
+        final selection = editorState.selection;
+        if (selection != null) {
+          final transaction = editorState.transaction;
+          transaction.insertNodes(selection.start.path, doc.root.children);
+          editorState.apply(transaction);
+          return;
+        }
+      }
+    }
+
+    // 4. Fallback: Colar texto simples com auto-formatação
+    final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+    if (clipboardData != null && clipboardData.text != null && clipboardData.text!.isNotEmpty) {
+      final doc = _createDocumentFromPlainText(clipboardData.text!);
+      
+      // AUTO-FORMATAÇÃO: Converter espaços colados em indentação de bloco
+      _autoFormatDocumentIndentation(doc);
+      
+      final selection = editorState.selection;
+      if (selection != null) {
+        final transaction = editorState.transaction;
+        transaction.insertNodes(selection.start.path, doc.root.children);
+        editorState.apply(transaction);
+        return;
+      }
+    }
+
+    // Se falhar tudo, usa o handler original
+    pasteCommand.handler(editorState);
+  }
+
+  Document _createDocumentFromPlainText(String text) {
+    final lines = text.split('\n');
+    final nodes = <Node>[];
+    for (var line in lines) {
+      line = line.replaceAll('\r', '');
+      nodes.add(
+        Node(
+          type: ParagraphBlockKeys.type,
+          attributes: {
+            'delta': (Delta()..insert(line)).toJson(),
+          },
+        ),
+      );
+    }
+    return Document(root: Node(type: 'document', children: nodes));
+  }
+
+  void _autoFormatDocumentIndentation(Document doc) {
+    for (final node in doc.root.children) {
+      if (node.type == ParagraphBlockKeys.type) {
+        final deltaJson = node.attributes['delta'];
+        if (deltaJson != null) {
+          try {
+            final delta = Delta.fromJson(List<Map<String, dynamic>>.from(deltaJson as List));
+            final text = delta.toPlainText();
+            final match = RegExp(r'^(\s+)').firstMatch(text);
+            
+            if (match != null && match.group(1)!.isNotEmpty) {
+              final spaces = match.group(1)!;
+              int indentLevel = spaces.length ~/ 2; // 2 espaços = 1 tabulação
+              if (indentLevel == 0) indentLevel = 1;
+              if (indentLevel > 8) indentLevel = 8;
+              
+              // Deletar os espaços do delta original de forma segura (preservando estilos)
+              final newDelta = delta.compose(Delta()..delete(spaces.length));
+              
+              node.attributes['delta'] = newDelta.toJson();
+              node.attributes['indent'] = indentLevel;
+            }
+          } catch (e) {
+            debugPrint('Erro na auto-formatação: $e');
+          }
+        }
+      }
+    }
+  }
+
 
   void _deleteDividerAtIndex(int index) {
     if (_editorState == null) return;
@@ -1546,7 +1657,7 @@ class _DocumentViewState extends State<DocumentView> {
       selectionColor: AppTheme.accent.withValues(alpha: 0.3),
       textStyleConfiguration: TextStyleConfiguration(
         text: AppTheme.codeTextStyle.copyWith(
-          fontSize: widget.textStyleController.fontSize,
+          fontSize: 16.0, // Tamanho base fixo para permitir formatação por seleção
           height: 1.5,
           color: AppTheme.textPrimary,
           fontWeight: FontWeight.normal,
@@ -1622,28 +1733,18 @@ class _DocumentViewState extends State<DocumentView> {
     // - Enter: insert soft newline (\n) in the same block with auto-indent
     // - Shift + Enter: original behavior (create new block)
     final customInsertNewLine = CharacterShortcutEvent(
-      key: 'custom_soft_newline',
+      key: 'custom_newline',
       character: '\n',
       handler: (editorState) async {
         final selection = editorState.selection?.normalized;
         if (selection == null) return false;
 
-        if (HardwareKeyboard.instance.isShiftPressed) {
-          // Shift + Enter -> original "insertNewLine" (new block)
-          await editorState.deleteSelection(selection);
-          await editorState.insertNewLine(position: selection.start);
-          return true;
-        }
-
-        // Enter only -> insert \n character in same block with auto-indent
-        if (!selection.isCollapsed) {
-          await editorState.deleteSelection(selection);
-        }
-
         final node = editorState.getNodeAtPath(selection.start.path);
-        final delta = node?.delta;
-        String insertString = '\n';
+        if (node == null) return false;
 
+        // 1. Calcular indentação por espaços (manual)
+        String spaceIndentation = '';
+        final delta = node.delta;
         if (widget.autoIndent && delta != null) {
           final text = delta.toPlainText();
           final offset = selection.start.offset;
@@ -1651,11 +1752,52 @@ class _DocumentViewState extends State<DocumentView> {
           if (lineStart < 0) lineStart = 0;
           final currentLine = text.substring(lineStart, offset);
           final match = RegExp(r'^\s*').firstMatch(currentLine);
-          final indentation = match?.group(0) ?? '';
-          insertString += indentation;
+          spaceIndentation = match?.group(0) ?? '';
         }
 
-        await editorState.insertTextAtCurrentSelection(insertString);
+        if (!HardwareKeyboard.instance.isShiftPressed) {
+          // Enter (Sem Shift) -> Soft Newline (mesmo bloco) para linhas mais próximas
+          if (!selection.isCollapsed) {
+            await editorState.deleteSelection(selection);
+          }
+          await editorState.insertTextAtCurrentSelection('\n$spaceIndentation');
+          return true;
+        }
+
+        // Shift + Enter -> Novo Bloco (espaçado) com herança total de alinhamento
+        await editorState.deleteSelection(selection);
+
+        // Atributos de bloco para herdar (ex: indentação do AppFlowy)
+        final blockAttributes = <String, dynamic>{};
+        if (node.attributes.containsKey('indent')) {
+          blockAttributes['indent'] = node.attributes['indent'];
+        }
+        if (node.attributes.containsKey('align')) {
+          blockAttributes['align'] = node.attributes['align'];
+        }
+
+        await editorState.insertNewLine(position: selection.start);
+
+        // Aplicar a herança no novo bloco criado
+        final newSelection = editorState.selection;
+        if (newSelection != null) {
+          final newNode = editorState.getNodeAtPath(newSelection.start.path);
+          if (newNode != null) {
+            final transaction = editorState.transaction;
+            
+            // Aplicar atributos de bloco (ex: indentação do sistema)
+            if (blockAttributes.isNotEmpty) {
+              transaction.updateNode(newNode, blockAttributes);
+            }
+            
+            // Aplicar indentação por espaços (manual)
+            if (spaceIndentation.isNotEmpty) {
+              transaction.insertText(newNode, 0, spaceIndentation);
+            }
+            
+            editorState.apply(transaction);
+          }
+        }
         return true;
       },
     );
@@ -1670,20 +1812,67 @@ class _DocumentViewState extends State<DocumentView> {
         final node = editorState.getNodeAtPath(selection.start.path);
         if (node == null) return KeyEventResult.ignored;
 
-        // If at the beginning of a list item, try block indentation
-        final isList =
-            node.type == BulletedListBlockKeys.type ||
-            node.type == NumberedListBlockKeys.type ||
-            node.type == TodoListBlockKeys.type;
+        // Se estiver no início da linha ou se houver uma seleção de várias linhas, indenta o(s) bloco(s)
+        // Isso resolve o problema de alinhamento e suporta tabulação múltipla
+        if (!selection.isCollapsed || selection.start.offset == 0) {
+          
+          // Recurso Mágico: Auto-formatar espaços iniciais em tabulação de bloco
+          // Se o usuário apertar Tab numa linha que tem espaços (ex: colada de outro lugar),
+          // nós absorvemos os espaços e transformamos na indentação correta.
+          if (selection.isCollapsed) {
+            final delta = node.delta;
+            if (delta != null) {
+              final text = delta.toPlainText();
+              final match = RegExp(r'^(\s+)').firstMatch(text);
+              if (match != null && match.group(1)!.isNotEmpty) {
+                final spaces = match.group(1)!;
+                int indentLevel = spaces.length ~/ 2; // 2 espaços = 1 tabulação
+                if (indentLevel == 0) indentLevel = 1;
+                
+                final transaction = editorState.transaction;
+                // Remove os espaços problemáticos
+                transaction.deleteText(node, 0, spaces.length);
+                
+                // Aplica a indentação de bloco real
+                final currentIndent = node.attributes['indent'] as int? ?? 0;
+                int newIndent = currentIndent + indentLevel;
+                if (newIndent > 8) newIndent = 8;
+                
+                transaction.updateNode(node, {'indent': newIndent});
+                editorState.apply(transaction);
+                return KeyEventResult.handled;
+              }
+            }
+          }
 
-        if (isList && selection.start.offset == 0) {
+          // Tenta o comando padrão (funciona para listas)
           final result = indentCommand.handler(editorState);
           if (result == KeyEventResult.handled) {
             return result;
           }
+
+          // Se o padrão ignorar (ex: parágrafos normais), fazemos a indentação manualmente
+          final nodes = editorState.getNodesInSelection(selection);
+          if (nodes.isNotEmpty) {
+            final transaction = editorState.transaction;
+            bool changed = false;
+            
+            for (final n in nodes) {
+              final currentIndent = n.attributes['indent'] as int? ?? 0;
+              if (currentIndent < 8) { // Limite máximo de tabulações
+                transaction.updateNode(n, {'indent': currentIndent + 1});
+                changed = true;
+              }
+            }
+            
+            if (changed) {
+              editorState.apply(transaction);
+              return KeyEventResult.handled;
+            }
+          }
         }
 
-        // Otherwise, insert spaces or tab character (synchronous)
+        // Caso contrário (no meio do texto sem seleção), insere os espaços/tab manualmente
         final tabString = widget.insertSpaces ? ' ' * widget.tabWidth : '\t';
         final transaction = editorState.transaction;
         transaction.insertText(node, selection.start.offset, tabString);
@@ -1698,6 +1887,61 @@ class _DocumentViewState extends State<DocumentView> {
         return KeyEventResult.handled;
       },
       getDescription: () => 'Insert tab or spaces',
+    );
+
+    final customUnindentCommand = CommandShortcutEvent(
+      key: 'custom_unindent',
+      command: 'unindent',
+      handler: (editorState) {
+        final selection = editorState.selection;
+        if (selection == null) return KeyEventResult.ignored;
+
+        // Tenta o comando padrão primeiro (funciona para listas)
+        final result = unindentCommand.handler(editorState);
+        if (result == KeyEventResult.handled) {
+          return result;
+        }
+
+        // Se o padrão ignorar (ex: parágrafos normais), fazemos o unindent manualmente
+        final nodes = editorState.getNodesInSelection(selection);
+        if (nodes.isNotEmpty) {
+          final transaction = editorState.transaction;
+          bool changed = false;
+          
+          for (final n in nodes) {
+            final currentIndent = n.attributes['indent'] as int? ?? 0;
+            if (currentIndent > 0) {
+              final newIndent = currentIndent - 1;
+              if (newIndent <= 0) {
+                // Remove o atributo se for 0 para não poluir o JSON
+                final newAttributes = Map<String, dynamic>.from(n.attributes)..remove('indent');
+                transaction.updateNode(n, newAttributes);
+              } else {
+                transaction.updateNode(n, {'indent': newIndent});
+              }
+              changed = true;
+            }
+          }
+          
+          if (changed) {
+            editorState.apply(transaction);
+            return KeyEventResult.handled;
+          }
+        }
+
+        return KeyEventResult.ignored;
+      },
+      getDescription: () => 'Unindent block',
+    );
+
+    final customPasteCommand = CommandShortcutEvent(
+      key: 'custom_paste',
+      command: 'paste',
+      handler: (editorState) {
+        _handlePaste(editorState);
+        return KeyEventResult.handled;
+      },
+      getDescription: () => 'Paste with formatting',
     );
 
     return GestureDetector(
@@ -1716,10 +1960,15 @@ class _DocumentViewState extends State<DocumentView> {
         ],
         commandShortcutEvents: [
           customTabCommand,
-          ...standardCommandShortcutEvents.where((e) => e.key != 'indent'),
+          customUnindentCommand,
+          customPasteCommand,
+          ...standardCommandShortcutEvents.where(
+            (e) => e.key != 'indent' && e.key != 'unindent' && e.command != 'paste',
+          ),
         ],
         blockComponentBuilders: {
           ...standardBlockComponentBuilderMap,
+          ParagraphBlockKeys.type: IndentedParagraphBlockBuilder(),
           'divider': CustomHorizontalRuleBuilder(
             speechController: widget.speechController,
             editorState: _editorState!,
@@ -1820,7 +2069,7 @@ class _DocumentViewState extends State<DocumentView> {
         cutCommand.handler(_editorState!);
         break;
       case 'paste':
-        pasteCommand.handler(_editorState!);
+        _handlePaste(_editorState!);
         break;
       case 'rename':
         if (activeTab != null) {
@@ -2415,6 +2664,62 @@ String _formatDuration(Duration d) {
   final seconds = twoDigits(d.inSeconds.remainder(60));
   return "$minutes:$seconds";
 }
+
+class IndentedParagraphBlockBuilder extends BlockComponentBuilder {
+  @override
+  BlockComponentWidget build(BlockComponentContext blockContext) {
+    final standardBuilder = standardBlockComponentBuilderMap[ParagraphBlockKeys.type]!;
+    final innerWidget = standardBuilder.build(blockContext);
+
+    return IndentedParagraphWidget(
+      key: blockContext.node.key,
+      inner: innerWidget,
+    );
+  }
+
+  @override
+  BlockComponentValidate get validate => (node) => node.type == ParagraphBlockKeys.type;
+}
+
+class IndentedParagraphWidget extends StatelessWidget implements BlockComponentWidget {
+  final BlockComponentWidget inner;
+
+  const IndentedParagraphWidget({
+    super.key,
+    required this.inner,
+  });
+
+  @override
+  Node get node => inner.node;
+
+  @override
+  bool get showActions => inner.showActions;
+
+  @override
+  BlockComponentActionBuilder? get actionBuilder => inner.actionBuilder;
+
+  @override
+  BlockComponentActionTrailingBuilder? get actionTrailingBuilder =>
+      inner.actionTrailingBuilder;
+
+  @override
+  BlockComponentConfiguration get configuration => inner.configuration;
+
+  @override
+  Widget build(BuildContext context) {
+    final indent = node.attributes['indent'] as int? ?? 0;
+    
+    if (indent > 0) {
+      return Padding(
+        padding: EdgeInsets.only(left: indent * 28.0), // Largura da tabulação
+        child: inner,
+      );
+    }
+    
+    return inner;
+  }
+}
+
 
 class CustomHorizontalRuleBuilder extends BlockComponentBuilder {
   final SpeechController? speechController;

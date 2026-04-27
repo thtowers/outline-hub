@@ -14,11 +14,29 @@ class ContentProcessor {
     final mainContent = _findMainContent(document);
 
     // 3. Conversão: HTML para Markdown
-    // Usamos o outerHtml do elemento selecionado ou o body inteiro se falhar
     final htmlToConvert = mainContent?.innerHtml ?? document.body?.innerHtml ?? '';
     
+    return _convertToMarkdown(htmlToConvert);
+  }
+
+  /// Converte um fragmento de HTML (como o da área de transferência) em Markdown.
+  static String processHtmlFragment(String htmlFragment) {
+    // Clipboard HTML often has headers, but the parser handles it.
+    // We just want to ensure we get the body content.
+    final document = html_parser.parse(htmlFragment);
+    
+    // Clean but be less aggressive than main content extraction
+    _cleanDocument(document);
+    
+    final htmlToConvert = document.body?.innerHtml ?? '';
+    return _convertToMarkdown(htmlToConvert);
+  }
+
+  static String _convertToMarkdown(String html) {
+    if (html.trim().isEmpty) return '';
+    
     return html2md.convert(
-      htmlToConvert,
+      html,
       styleOptions: {
         'headingStyle': 'atx', // # H1
         'hr': '---',
